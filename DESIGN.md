@@ -273,11 +273,15 @@ Semantics:
 - Edits survive post-processing option changes. They are cleared when the network outputs change
   (new image, model, or working size), with a status message.
 
+Pointer handling calls `preventDefault` on pointerdown, and the image is `draggable="false"`.
+Otherwise Chrome starts a native image drag, which cancels the pointer stream mid-stroke.
+
 UI (`src/editor.ts`): a floating toolbar with these tools:
 - **Pan** (V; or hold Space; scroll zooms about the cursor).
 - **Keypoints** (K): click to add with the current type (1/2/3), drag to move, double-click to cycle
   the type, Alt-click or Delete to remove.
 - **USM brush** (B) and **Eraser** (E), with a size control.
+- **Lasso** (L): draw a loop to fill the cells whose centers are inside; hold Alt on release to erase.
 
 Also: undo / redo (⌘Z, ⇧⌘Z / Ctrl+Y), reset to the automatic result (undoable), and zoom buttons
 (− / Fit / +, keys −, 0, +). Edits are coalesced: while a run is in flight, further edits trigger
@@ -290,7 +294,6 @@ strip along the roof with its original lines. Undo, redo, reset, eraser, and kee
 ## 9. Next steps
 
 - Editing polish:
-  - a lasso fill for the USM (the reference UI has one);
   - show which keypoints are inside which region, and why a region is not refined;
   - pinch zoom on touch screens.
 - Downloading the edit state (marks + USM) to resume later.

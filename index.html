@@ -126,6 +126,7 @@
             <button data-tool="keypoint" title="Edit keypoints (K)">Keypoints</button>
             <button data-tool="brush" title="Paint the under-sampling map (B)">USM brush</button>
             <button data-tool="eraser" title="Erase the under-sampling map (E)">Eraser</button>
+            <button data-tool="lasso" title="Fill a loop in the under-sampling map; hold Alt to erase (L)">Lasso</button>
           </div>
           <div class="group" id="markTypes" role="radiogroup" aria-label="Keypoint type" hidden>
             <button data-type="1" title="End point (1)"><i class="dot end"></i>End</button>
@@ -146,10 +147,11 @@
         </div>
         <p class="edit-hint" id="editHint" hidden></p>
         <div class="canvas" id="canvas" hidden>
-          <img id="input" alt="Input sketch" />
+          <img id="input" alt="Input sketch" draggable="false" />
           <canvas id="usm" class="overlay"></canvas>
           <div id="vector" class="overlay"></div>
           <svg id="keypoints" class="overlay"></svg>
+          <svg id="lasso" class="overlay"></svg>
         </div>
       </section>
     </main>

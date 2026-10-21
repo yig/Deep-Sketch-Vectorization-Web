@@ -64,7 +64,13 @@ const ui = {
   editHint: $("editHint"),
 };
 
-const editor = new Editor({ stage: ui.stage, canvas: ui.canvas, usm: ui.usm, keypoints: ui.keypoints });
+const editor = new Editor({
+  stage: ui.stage,
+  canvas: ui.canvas,
+  usm: ui.usm,
+  keypoints: ui.keypoints,
+  lasso: $("lasso") as unknown as SVGSVGElement,
+});
 editor.onChange = () => {
   updateToolbar();
   run();
@@ -240,6 +246,7 @@ const HINTS: Record<Tool, string> = {
   keypoint: "Click to add a keypoint · drag to move · double-click to change its type · Alt-click or Delete to remove",
   brush: "Paint under-sampled regions (USM). Each region is rebuilt by connecting the lines entering it to the keypoint inside.",
   eraser: "Erase under-sampled regions: their original dual-contouring lines come back.",
+  lasso: "Draw a loop to fill it with USM. Hold Alt while releasing to erase inside the loop instead.",
 };
 
 function setTool(t: Tool) {
@@ -292,6 +299,7 @@ window.addEventListener("keydown", (e) => {
   else if (k === "k") setTool("keypoint");
   else if (k === "b") setTool("brush");
   else if (k === "e") setTool("eraser");
+  else if (k === "l") setTool("lasso");
   else if (k === "1" || k === "2" || k === "3") {
     editor.setMarkType(Number(k) as MarkType);
     updateToolbar();

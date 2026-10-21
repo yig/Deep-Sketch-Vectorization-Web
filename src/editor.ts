@@ -6,7 +6,7 @@
 
 import { CellStatus, type EditState, type RunResult } from "./protocol";
 
-export type Tool = "pan" | "keypoint" | "brush" | "eraser";
+export type Tool = "pan" | "keypoint" | "brush" | "eraser" | "lasso";
 export type MarkType = 1 | 2 | 3;
 
 export interface EditorElements {
@@ -14,6 +14,7 @@ export interface EditorElements {
   canvas: HTMLElement;
   usm: HTMLCanvasElement;
   keypoints: SVGSVGElement;
+  lasso: SVGSVGElement;
 }
 
 const HISTORY_LIMIT = 60;
@@ -240,7 +241,8 @@ export class Editor {
 
   private bindPointer() {
     const stage = this.els.stage;
-    let mode: "none" | "pan" | "drag" | "paint" = "none";
+    let mode: "none" | "pan" | "drag" | "paint" | "lasso" = "none";
+    let path: { x: number; y: number }[] = [];
     let last = { x: 0, y: 0 };
     let moved = false;
     let draft: EditState | null = null;
@@ -248,6 +250,7 @@ export class Editor {
     stage.addEventListener("pointerdown", (e) => {
       if (this.els.canvas.hidden || !this.state || e.button === 2) return;
       if ((e.target as Element).closest(".toolbar, .edit-hint")) return;
+      e.preventDefault(); // no native image drag or text selection
       stage.setPointerCapture(e.pointerId);
       last = { x: e.clientX, y: e.clientY };
       moved = false;
@@ -277,6 +280,10 @@ export class Editor {
         }
         mode = "drag";
         this.renderMarks(draft);
+      } else if (this.tool === "lasso") {
+        mode = "lasso";
+        path = [p];
+        this.renderLasso(path, e.altKey);
       } else {
         draft = cloneState(this.state);
         mode = "paint";
@@ -304,19 +311,37 @@ export class Editor {
         this.renderMarks(draft);
       } else if (mode === "paint" && draft) {
         this.paint(draft, a.x, a.y, b.x, b.y);
+      } else if (mode === "lasso") {
+        path.push(b);
+        this.renderLasso(path, e.altKey);
       }
       last = { x: e.clientX, y: e.clientY };
     });
 
-    const end = () => {
-      if (mode === "pan") stage.classList.remove("panning");
+    const end = (e: PointerEvent) => {
+      if (mode === "lasso") {
+        this.renderLasso([], false);
+        if (path.length >= 3 && this.state) {
+          const next = cloneState(this.state);
+          if (this.fillPolygon(next, path, e.altKey ? 0 : 1)) this.commit(next);
+        }
+        path = [];
+      } else if (mode === "pan") stage.classList.remove("panning");
       else if ((mode === "drag" || mode === "paint") && draft && moved) this.commit(draft);
       else this.render();
       mode = "none";
       draft = null;
     };
     stage.addEventListener("pointerup", end);
-    stage.addEventListener("pointercancel", end);
+    stage.addEventListener("pointercancel", () => {
+      // Abandon the gesture.
+      if (mode === "lasso") this.renderLasso([], false);
+      stage.classList.remove("panning");
+      mode = "none";
+      draft = null;
+      path = [];
+      this.render();
+    });
 
     stage.addEventListener("dblclick", (e) => {
       if (this.tool !== "keypoint" || !this.state || (e.target as Element).closest(".toolbar")) return;
@@ -368,6 +393,54 @@ export class Editor {
         if (Math.hypot(ci - ai - t * di, cj - aj - t * dj) <= r) draft.usm[i * g.w + j] = value;
       }
     this.renderUsm(draft);
+  }
+
+  /** Set the cells whose centers lie inside the polygon (even-odd rule). Returns whether any changed. */
+  private fillPolygon(draft: EditState, poly: { x: number; y: number }[], value: number): boolean {
+    const g = this.grid;
+    if (!g) return false;
+    const ys = poly.map((q) => q.y / g.cell);
+    const xs = poly.map((q) => q.x / g.cell);
+    const i0 = Math.max(0, Math.floor(Math.min(...ys)));
+    const i1 = Math.min(g.h - 1, Math.ceil(Math.max(...ys)));
+    let changed = false;
+    for (let i = i0; i <= i1; i++) {
+      const cy = i + 0.5;
+      // Crossings of the scanline with each polygon edge.
+      const cross: number[] = [];
+      for (let k = 0; k < xs.length; k++) {
+        const k2 = (k + 1) % xs.length;
+        const [ya, yb] = [ys[k], ys[k2]];
+        if (ya <= cy !== yb <= cy) cross.push(xs[k] + ((cy - ya) / (yb - ya)) * (xs[k2] - xs[k]));
+      }
+      cross.sort((a, b) => a - b);
+      for (let c = 0; c + 1 < cross.length; c += 2) {
+        const j0 = Math.max(0, Math.ceil(cross[c] - 0.5));
+        const j1 = Math.min(g.w - 1, Math.floor(cross[c + 1] - 0.5));
+        for (let j = j0; j <= j1; j++) {
+          const p = i * g.w + j;
+          if (draft.usm[p] !== value) {
+            draft.usm[p] = value;
+            changed = true;
+          }
+        }
+      }
+    }
+    return changed;
+  }
+
+  private renderLasso(path: { x: number; y: number }[], erase: boolean) {
+    const svg = this.els.lasso;
+    svg.setAttribute("viewBox", `0 0 ${this.srcW} ${this.srcH}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    if (path.length < 2) {
+      svg.innerHTML = "";
+      return;
+    }
+    const k = this.srcPerScreen;
+    const pts = path.map((q) => `${q.x},${q.y}`).join(" ");
+    const color = erase ? "#6b7280" : "#2563eb";
+    svg.innerHTML = `<polygon points="${pts}" fill="${color}" fill-opacity="0.15" stroke="${color}" stroke-width="${1.5 * k}" stroke-dasharray="${4 * k} ${3 * k}"/>`;
   }
 
   private bindKeys() {

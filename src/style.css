@@ -294,6 +294,8 @@ button.link {
 
 .stage {
   position: relative;
+  user-select: none;
+  -webkit-user-select: none;
   background: var(--stage);
   overflow: hidden;
   display: flex;
@@ -312,7 +314,8 @@ button.link {
 }
 .stage[data-tool="keypoint"],
 .stage[data-tool="brush"],
-.stage[data-tool="eraser"] {
+.stage[data-tool="eraser"],
+.stage[data-tool="lasso"] {
   cursor: crosshair;
 }
 
