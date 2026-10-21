@@ -49,6 +49,8 @@ export class Editor {
   private auto: EditState | null = null;
   private prepKey = "";
   private edited = false;
+  /** Loaded edits waiting for the result with their prep key. */
+  private pendingImport: { prepKey: string; state: EditState } | null = null;
   private undoStack: EditState[] = [];
   private redoStack: EditState[] = [];
   private result: RunResult | null = null;
@@ -86,10 +88,33 @@ export class Editor {
     return this.edited;
   }
 
+  /** The current state, for saving. */
+  get current(): EditState | null {
+    return this.state ? cloneState(this.state) : null;
+  }
+
+  /** Grid size of the current result. */
+  get gridSize() {
+    return this.result ? { w: this.result.gridW, h: this.result.gridH } : null;
+  }
+
+  /**
+   * Replace the state with loaded edits (undoable). If the current result has a different prep key
+   * (other model or working size), the edits are applied when the matching result arrives.
+   */
+  importState(prepKey: string, state: EditState) {
+    if (this.state && this.result && prepKey === this.prepKey && state.usm.length === this.result.usm.length) {
+      this.pendingImport = null;
+      this.selected = -1;
+      this.commit(cloneState(state));
+    } else this.pendingImport = { prepKey, state };
+  }
+
   setSource(w: number, h: number) {
     this.srcW = w;
     this.srcH = h;
     this.state = this.auto = this.result = null;
+    this.pendingImport = null;
     this.undoStack = [];
     this.redoStack = [];
     this.edited = false;
@@ -113,7 +138,16 @@ export class Editor {
         this.selected = -1;
       }
       this.prepKey = result.prepKey;
-      if (hadEdits) this.onStatus("Edits cleared: the network outputs changed.");
+      if (this.pendingImport?.prepKey === result.prepKey) {
+        const imp = this.pendingImport;
+        this.pendingImport = null;
+        if (imp.state.usm.length === result.usm.length) {
+          this.render();
+          this.commit(cloneState(imp.state));
+          return;
+        }
+        this.onStatus("Could not apply the loaded edits: the grid size does not match.");
+      } else if (hadEdits) this.onStatus("Edits cleared: the network outputs changed.");
     } else if (version === this.version && this.state) {
       // Adopt the worker's snapped keypoint positions (same order as sent).
       this.state.marks = result.marks.map((m) => ({ ...m }));
@@ -483,7 +517,7 @@ export class Editor {
   private bindKeys() {
     window.addEventListener("keydown", (e) => {
       const t = e.target as HTMLElement;
-      if (t.closest("input, select, textarea")) return;
+      if (t.closest("textarea, select, input[type=text], input[type=number]")) return;
       if (e.key === " ") {
         this.spaceHeld = true;
         e.preventDefault();

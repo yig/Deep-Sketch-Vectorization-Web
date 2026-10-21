@@ -7,7 +7,7 @@ import { runNdcTiled, runUdfTiled, NDC_HALO, UDF_HALO } from "./inference/tiling
 import { prepareImage, type PreparedImage } from "./pipeline/image";
 import { finish, prepare, toSvg, type Prepared } from "./pipeline/vectorize";
 import { RegionStatus, snapMark, type Mark } from "./pipeline/topology";
-import { CellStatus, type RunRequest, type WorkerRequest, type WorkerResponse } from "./protocol";
+import { CellStatus, prepKeyOf, type RunRequest, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
 
@@ -15,7 +15,7 @@ let cached: { key: string; image: PreparedImage; prep: Prepared; timings: Record
 
 async function run(req: RunRequest) {
   const progress = (message: string, frac: number) => post({ type: "progress", id: req.id, message, frac });
-  const key = `${req.imageKey}|${req.model}|${req.maxSide}`;
+  const key = prepKeyOf(req.imageKey, req.model, req.maxSide);
   const nets = await loadNetworks(req.model, progress);
   if (cached?.key !== key) {
     cached = null;

@@ -202,6 +202,26 @@ button.primary {
   color: var(--accent-ink);
   font-weight: 600;
 }
+.actions .row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.secondary {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  text-align: center;
+  font-size: 13px;
+}
+.secondary:disabled,
+.file-button.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 button.primary:disabled {
   opacity: 0.45;
   cursor: default;

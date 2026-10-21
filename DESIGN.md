@@ -73,6 +73,7 @@ to the offset plus (0.25 + 0.5j, 0.25 + 0.5i).
 | `src/worker.ts` | `server.py` | Web Worker: runs everything; caches network outputs and `Prepared` per (image, model, size) |
 | `src/protocol.ts` | — | main thread ↔ worker messages, edit state, per-cell status codes |
 | `src/editor.ts` | `web/js/canvas.js` | interactive refinement: zoom / pan, keypoint and USM tools, undo / redo |
+| `src/editfile.ts` | `npz_save` / `usm_push` | save / load the edit state as JSON |
 | `src/main.ts`, `index.html`, `src/style.css` | — | UI |
 | `tools/export_onnx.py` | — | checkpoint → ONNX export + check against PyTorch |
 | `tools/make_fixtures.py` | — | runs the reference pipeline and dumps every intermediate |
@@ -190,6 +191,8 @@ Current fixtures: three light-model and one full-model run on `../SketchVG/png_h
 - every region is explained, with keypoint counts matching the marks;
 - `snapMark` snaps or keeps the position.
 
+`tests/editfile.test.ts` checks that edit files round-trip and that corrupt files are rejected.
+
 `tests/e2e.test.ts` (`npm run test:e2e`) runs the ONNX models in onnxruntime-web (WASM, Node) with
 tiling, then the TypeScript pipeline. It passes on all fixtures: UDF and aux within 1e-3 of PyTorch,
 no edge-flag flips, and segments identical to the reference's grouping input.
@@ -281,6 +284,15 @@ Semantics:
 Pointer handling calls `preventDefault` on pointerdown, and the image is `draggable="false"`.
 Otherwise Chrome starts a native image drag, which cancels the pointer stream mid-stroke.
 
+**Saving edits** (`src/editfile.ts`): "Save edits" writes `<image>.edits.json` with the keypoints
+(source pixels plus grid cell), the USM run-length encoded (about 20 KB for the sample), the grid
+size, the model, the working size, and the image's content hash. "Load edits…", or dropping the file
+onto the page, checks the hash against the open image and switches to the saved model and working
+size if needed. The edits are applied when the matching result arrives, as one undoable step.
+
+Keyboard shortcuts are ignored only while typing into text fields. A focused radio button,
+checkbox, or slider does not block them.
+
 UI (`src/editor.ts`): a floating toolbar with these tools:
 - **Pan** (V; or hold Space; scroll zooms about the cursor).
 - **Keypoints** (K): click to add with the current type (1/2/3), drag to move, double-click to cycle
@@ -300,7 +312,6 @@ strip along the roof with its original lines. Undo, redo, reset, eraser, and kee
 
 - Editing polish:
   - pinch zoom on touch screens.
-- Downloading the edit state (marks + USM) to resume later.
 - fp16 models for the full variant (half the download). This needs an accuracy check against fp32,
   since a flipped edge flag changes topology.
 - Hosting: the models could be served from Hugging Face (`VITE_MODEL_BASE`) instead of the site.

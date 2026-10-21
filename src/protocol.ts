@@ -7,6 +7,9 @@ import type { RegionInfo } from "./pipeline/topology";
 
 export type { RegionInfo };
 
+/** Identifies one set of network outputs; edits are only valid for the same key. */
+export const prepKeyOf = (imageKey: string, model: ModelVariant, maxSide: number) => `${imageKey}|${model}|${maxSide}`;
+
 /** A keypoint as the UI sees it, in source-image pixels. `cell` is set for keypoints the worker placed. */
 export interface UiMark {
   type: 1 | 2 | 3;

@@ -25,7 +25,7 @@
             <input id="file" type="file" accept="image/*" />
             Open image…
           </label>
-          <p class="hint">Or drop / paste an image anywhere. Dark lines on a light background work best.</p>
+          <p class="hint">Or drop / paste an image anywhere. Dark lines on a light background work best. Drop a saved <code>.edits.json</code> to resume editing.</p>
         </section>
 
         <section>
@@ -102,6 +102,12 @@
 
         <section class="actions">
           <button id="download" class="primary" disabled>Download SVG</button>
+          <div class="row">
+            <button id="saveEdits" class="secondary" disabled title="Save keypoints and USM edits to a file">Save edits</button>
+            <label class="secondary file-button" id="loadEditsLabel" title="Load edits saved for this image">
+              <input id="loadEdits" type="file" accept=".json,application/json" disabled />Load edits…
+            </label>
+          </div>
         </section>
 
         <section class="status" aria-live="polite">

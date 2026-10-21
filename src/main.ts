@@ -4,6 +4,8 @@ import type { RunResult, WorkerRequest, WorkerResponse } from "./protocol";
 import { rgbaToGray } from "./pipeline/image";
 import type { VectorizeOptions } from "./pipeline/vectorize";
 import { Editor, type MarkType, type Tool } from "./editor";
+import { decodeEdits, encodeEdits } from "./editfile";
+import { prepKeyOf } from "./protocol";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -62,6 +64,8 @@ const ui = {
   redo: $<HTMLButtonElement>("redo"),
   resetEdits: $<HTMLButtonElement>("resetEdits"),
   editHint: $("editHint"),
+  saveEdits: $<HTMLButtonElement>("saveEdits"),
+  loadEdits: $<HTMLInputElement>("loadEdits"),
 };
 
 const editor = new Editor({
@@ -278,6 +282,9 @@ function updateToolbar() {
     b.setAttribute("aria-pressed", String(Number(b.dataset.type) === editor.markType));
   ui.markTypes.hidden = editor.tool !== "keypoint";
   ui.brushField.hidden = editor.tool !== "brush" && editor.tool !== "eraser";
+  ui.saveEdits.disabled = !editor.isEdited || !result;
+  ui.loadEdits.disabled = !source;
+  $("loadEditsLabel").classList.toggle("disabled", !source);
   ui.undo.disabled = !editor.canUndo;
   ui.redo.disabled = !editor.canRedo;
   ui.resetEdits.disabled = !editor.isEdited;
@@ -300,8 +307,16 @@ $("zoomIn").addEventListener("click", () => editor.zoomBy(1.5));
 $("zoomOut").addEventListener("click", () => editor.zoomBy(1 / 1.5));
 $("zoomFit").addEventListener("click", () => editor.fit());
 
+/** Keyboard shortcuts stay active unless the user is typing into a field. */
+function isTextEntry(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+  return el.tagName === "INPUT" && ["text", "number", "search", "email", "url", "password"].includes((el as HTMLInputElement).type);
+}
+
 window.addEventListener("keydown", (e) => {
-  if ((e.target as HTMLElement).closest("input, select, textarea") || !source) return;
+  if (isTextEntry(e.target) || !source) return;
   const mod = e.metaKey || e.ctrlKey;
   const k = e.key.toLowerCase();
   if (mod && k === "z") {
@@ -343,6 +358,7 @@ ui.file.addEventListener("change", () => {
   const f = ui.file.files?.[0];
   if (f) loadImage(f, f.name);
   ui.file.value = "";
+  ui.file.blur();
 });
 
 for (const el of document.querySelectorAll<HTMLInputElement>('input[name="model"]')) el.addEventListener("change", run);
@@ -367,10 +383,56 @@ ui.download.addEventListener("click", () => {
   if (!result || !source) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([result.svg], { type: "image/svg+xml" }));
-  a.download = source.name.replace(/\.[^.]+$/, "") + ".svg";
+  a.download = `${baseName()}.svg`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
+
+const baseName = () => (source?.name ?? "sketch").replace(/\.[^.]+$/, "");
+
+ui.saveEdits.addEventListener("click", () => {
+  const state = editor.current;
+  const grid = editor.gridSize;
+  if (!source || !state || !grid) return;
+  const text = encodeEdits(state, { key: source.key, name: source.name, width: source.width, height: source.height }, model(), Number(ui.maxSide.value), grid);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  a.download = `${baseName()}.edits.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+ui.loadEdits.addEventListener("change", () => {
+  const f = ui.loadEdits.files?.[0];
+  ui.loadEdits.value = "";
+  ui.loadEdits.blur(); // keep keyboard shortcuts working
+  if (f) loadEditsFile(f);
+});
+
+async function loadEditsFile(f: File) {
+  if (!source) {
+    setStatus("Open the image the edits belong to first.");
+    return;
+  }
+  try {
+    const { file, state } = decodeEdits(await f.text());
+    if (file.image.key !== source.key) {
+      setStatus(`These edits are for a different image (${file.image.name}). Open that image first.`);
+      return;
+    }
+    // Switch to the model and working size the edits were made with.
+    const radio = document.querySelector<HTMLInputElement>(`input[name="model"][value="${file.model}"]`)!;
+    const changed = !radio.checked || Number(ui.maxSide.value) !== file.maxSide;
+    radio.checked = true;
+    if (![...ui.maxSide.options].some((o) => Number(o.value) === file.maxSide)) ui.maxSide.add(new Option(`${file.maxSide} px`, String(file.maxSide)));
+    ui.maxSide.value = String(file.maxSide);
+    editor.importState(prepKeyOf(source.key, file.model, file.maxSide), state);
+    if (changed) run();
+    setStatus("Loaded edits.");
+  } catch (e) {
+    setStatus(`Could not load edits: ${e instanceof Error ? e.message : e}`);
+  }
+}
 
 // Drag & drop and paste.
 const stage = document.body;
@@ -384,8 +446,11 @@ stage.addEventListener("dragleave", (e) => {
 stage.addEventListener("drop", (e) => {
   e.preventDefault();
   ui.stage.classList.remove("dragging");
-  const f = [...(e.dataTransfer?.files ?? [])].find((f) => f.type.startsWith("image/"));
-  if (f) loadImage(f, f.name);
+  const files = [...(e.dataTransfer?.files ?? [])];
+  const img = files.find((f) => f.type.startsWith("image/"));
+  const edits = files.find((f) => f.name.endsWith(".json"));
+  if (img) loadImage(img, img.name);
+  else if (edits) loadEditsFile(edits);
 });
 window.addEventListener("paste", (e) => {
   const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
