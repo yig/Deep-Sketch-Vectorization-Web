@@ -181,11 +181,12 @@ Current fixtures: three light-model and one full-model run on `../SketchVG/png_h
 - **structural:** stroke grouping (§7, deviation 1). Every stroke segment must be an input segment;
   covered segments within 5% of the reference, and stroke count within 25%.
 
-`tests/editing.test.ts` (6 tests) checks the editing semantics on a fixture's network outputs:
+`tests/editing.test.ts` (7 tests) checks the editing semantics on a fixture's network outputs:
 - the automatic pass equals `surgery(autoMarks, autoUsm)`;
 - erasing a refined region removes its surgery, and restoring the USM gives the automatic result back;
 - adding a keypoint to an unrefined region makes it refinable;
 - painting a new region over a line rebuilds it;
+- painting next to a detail-only region keeps it separate;
 - `snapMark` snaps or keeps the position.
 
 `tests/e2e.test.ts` (`npm run test:e2e`) runs the ONNX models in onnxruntime-web (WASM, Node) with
@@ -252,10 +253,13 @@ function on the automatic state, so with no edits the result is identical, and u
 snapshot stack on the main thread (60 steps, about 1 MB per USM snapshot at 512 px).
 
 Semantics:
-- **Regions** are the 4-connected components of the nonzero USM. A region gets surgery if any of its
-  cells is 1. Value 2 marks regions the automatic pass kept out of surgery (larger than long side /
-  50 cells, or closing merged several predicted regions). Their geometry is still kept at full
-  resolution by the downsampling. Painting any part of such a region activates the whole region.
+- **Regions** are 4-connected groups of cells with the same USM value. Regions of 1s get surgery.
+  Value 2 marks regions the automatic pass kept out of surgery (larger than long side / 50 cells, or
+  closing merged several predicted regions). Their geometry is still kept at full resolution by the
+  downsampling. **Painting only affects the painted cells:** paint touching a detail-only region
+  forms its own region, and polylines entering it from the detail region are reconnected like any
+  others. In the automatic state, regions of 1s and 2s never touch, so this labeling equals the
+  reference's components of the whole USM.
 - **Keypoints inside a region** are the marks whose cell is in it. Marks from the automatic pass sit
   on the dual-contouring vertex they were aligned to. A keypoint the user adds or moves is snapped
   to the nearest vertex within 1.5 px (`snapMark`); with none near, it keeps its position and counts
@@ -279,17 +283,15 @@ Also: undo / redo (⌘Z, ⇧⌘Z / Ctrl+Y), reset to the automatic result (undoa
 (− / Fit / +, keys −, 0, +). Edits are coalesced: while a run is in flight, further edits trigger
 one more run when it returns.
 
-Verified in headless Chrome: painting a region over the sample's chimney/roof T-junction
-activated the adjacent detail region and rebuilt the junction as straight lines meeting at the
-junction keypoint. Undo, redo, reset, eraser, and keeping edits across an option change all work.
+Verified in headless Chrome: painting a disc over the sample's chimney/roof T-junction rebuilt only
+the disc, as straight lines meeting at the junction keypoint, and left the adjacent detail-only
+strip along the roof with its original lines. Undo, redo, reset, eraser, and keeping edits across an option change all work.
 
 ## 9. Next steps
 
 - Editing polish:
   - a lasso fill for the USM (the reference UI has one);
   - show which keypoints are inside which region, and why a region is not refined;
-  - optionally restrict "activate on touch" so painting next to a large detail region does not
-    activate all of it;
   - pinch zoom on touch screens.
 - Downloading the edit state (marks + USM) to resume later.
 - fp16 models for the full variant (half the download). This needs an accuracy check against fp32,

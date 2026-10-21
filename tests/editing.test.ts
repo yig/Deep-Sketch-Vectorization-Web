@@ -101,6 +101,29 @@ describe.skipIf(fixtures.length === 0)("interactive refinement", () => {
     expect(res.regionStatus[res.regionLabels[target]]).toBe(RegionStatus.Applied);
   });
 
+  test("painting next to a detail-only region does not pull it into the surgery", () => {
+    const { h, w } = prep;
+    const usm = prep.autoUsm.slice();
+    // A detail-only cell with a free 4-neighbor to paint.
+    let detail = -1;
+    let paint = -1;
+    for (let p = 0; p < h * w && paint < 0; p++) {
+      if (usm[p] !== 2) continue;
+      for (const q of [p - 1, p + 1, p - w, p + w])
+        if (q >= 0 && q < h * w && usm[q] === 0) {
+          detail = p;
+          paint = q;
+          break;
+        }
+    }
+    expect(paint).toBeGreaterThanOrEqual(0);
+    usm[paint] = 1;
+    const res = finish(prep, prep.autoMarks, usm);
+    expect(res.regionLabels[paint]).not.toBe(res.regionLabels[detail]);
+    expect(res.regionStatus[res.regionLabels[detail]]).toBe(RegionStatus.Inactive);
+    expect(usm[detail]).toBe(2);
+  });
+
   test("snapMark snaps to a nearby vertex", () => {
     const { pt, valence } = prep.base;
     const v = valence.findIndex((x) => x > 0);

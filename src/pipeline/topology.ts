@@ -431,7 +431,7 @@ export function autoUsm(base: DCBase, usmPred: Mask): Uint8Array {
 
 /** Per-region outcome of the surgery. */
 export const RegionStatus = {
-  /** No cell of the region is active (value 1): geometry is only kept fine during downsampling. */
+  /** A detail-only region (USM value 2): no surgery, geometry is only kept fine during downsampling. */
   Inactive: 0,
   /** The region's border is not a single contour (it has holes), or no polyline enters it. */
   Invalid: 1,
@@ -445,7 +445,7 @@ export interface SurgeryResult {
   lines: number[];
   /** Added segments per refined region label. */
   refined: Map<number, number[]>;
-  /** 4-connected components of the nonzero USM, labelled in raster order. */
+  /** 4-connected components of equal nonzero USM values, labelled in raster order. */
   labels: Int32Array;
   /** Status per label (index 0 unused). */
   status: Uint8Array;
@@ -458,7 +458,9 @@ export interface SurgeryResult {
 
 /**
  * USM surgery (update_line_maps for each region) followed by dual contouring downsampling.
- * `usm` holds 0 / 1 / 2 per cell (see autoUsm); a region gets surgery if any of its cells is 1.
+ * `usm` holds 0 / 1 / 2 per cell (see autoUsm). Regions are 4-connected cells of equal value; regions
+ * of 1s get surgery, and all nonzero cells keep their fine geometry during downsampling. A region of
+ * 1s next to one of 2s stays separate: painting only affects the painted cells.
  * Pure: the base is not modified. With autoUsm and autoMarks this is refine_topology(...,
  * downsample=True, manual=False, full_auto_mode=True); with user-edited marks and USM it is the
  * interactive refinement.
@@ -470,13 +472,17 @@ export function surgery(base: DCBase, marks: Mark[], usm: Uint8Array, downRate: 
   const lx = cloneLineMap(base.lx);
   const ly = cloneLineMap(base.ly);
   const grid = markGrid(marks, n);
-  const { labels, count } = connectedComponents(usm, h, w, 4);
+  const { labels, count } = connectedComponents(usm, h, w, 4, true);
   const status = new Uint8Array(count + 1);
   const usmApplied = new Int32Array(n);
   const usmUncertain = new Int32Array(n);
   const refined = new Map<number, number[]>();
   const usmRegions = new Uint8Array(n);
-  for (let p = 0; p < n; p++) usmRegions[p] = usm[p] ? 1 : 0;
+  const surgeryCells = new Uint8Array(n);
+  for (let p = 0; p < n; p++) {
+    usmRegions[p] = usm[p] ? 1 : 0;
+    surgeryCells[p] = usm[p] === 1 ? 1 : 0;
+  }
 
   const cells: number[][] = Array.from({ length: count + 1 }, () => []);
   const active = new Uint8Array(count + 1);
@@ -493,7 +499,8 @@ export function surgery(base: DCBase, marks: Mark[], usm: Uint8Array, downRate: 
     if (!active[idx]) continue;
     const rc = cells[idx];
     status[idx] = RegionStatus.Invalid;
-    const cps = findConnectionPoints(hasVertex, pt, rc, usmRegions, h, w);
+    // Polylines entering from a neighboring detail-only region count as entering this one.
+    const cps = findConnectionPoints(hasVertex, pt, rc, surgeryCells, h, w);
     if (cps === null) continue;
     const r = updateLineMaps(lx, ly, pt, ptMask, grid, cps, rc);
     if (r === null) continue;

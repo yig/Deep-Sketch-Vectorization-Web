@@ -3,12 +3,16 @@
 
 export type Mask = Uint8Array<ArrayBuffer>;
 
-/** cv2.connectedComponents: labels 1..n assigned in raster order of each component's first pixel. */
+/**
+ * cv2.connectedComponents: labels 1..n assigned in raster order of each component's first pixel.
+ * With `sameValue`, neighbors only connect if their (nonzero) values are equal.
+ */
 export function connectedComponents(
   mask: ArrayLike<number>,
   h: number,
   w: number,
   connectivity: 4 | 8,
+  sameValue = false,
 ): { labels: Int32Array; count: number } {
   const labels = new Int32Array(h * w);
   const stack = new Int32Array(h * w);
@@ -32,7 +36,7 @@ export function connectedComponents(
           const jj = j + dj;
           if (jj < 0 || jj >= w) continue;
           const q = ii * w + jj;
-          if (mask[q] && !labels[q]) {
+          if (mask[q] && !labels[q] && (!sameValue || mask[q] === mask[p])) {
             labels[q] = next;
             stack[top++] = q;
           }
