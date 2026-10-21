@@ -3,6 +3,9 @@
 
 import type { DeviceOverrides, ModelVariant } from "./inference/session";
 import type { VectorizeOptions } from "./pipeline/vectorize";
+import type { RegionInfo } from "./pipeline/topology";
+
+export type { RegionInfo };
 
 /** A keypoint as the UI sees it, in source-image pixels. `cell` is set for keypoints the worker placed. */
 export interface UiMark {
@@ -63,6 +66,9 @@ export interface RunResult {
   /** USM used (0 / 1 / 2) and per-cell status (CellStatus), on the 2x grid of the prepared image. */
   usm: Uint8Array;
   cellStatus: Uint8Array;
+  /** Region label per cell (0 none) and information per label (index 0 unused). */
+  regionLabels: Int32Array;
+  regionInfo: RegionInfo[];
   regions: { applied: number; notApplied: number; invalid: number };
   gridW: number;
   gridH: number;

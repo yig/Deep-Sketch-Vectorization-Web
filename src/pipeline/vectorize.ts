@@ -2,7 +2,7 @@
 
 import { edgeMapFromLogits, lineMaps, refineEdgeMap, vertexMapFromOffsets } from "./dualContouring";
 import { extractKeypoints, underSamplingMap, type Keypoints } from "./keypoints";
-import { autoMarks, autoUsm, dcBase, marksToKeypoints, surgery, type DCBase, type Mark } from "./topology";
+import { autoMarks, autoUsm, dcBase, marksToKeypoints, surgery, type DCBase, type Mark, type RegionInfo } from "./topology";
 import { groupStrokes, type Polyline } from "./grouping";
 import { fitBezier, rdp, type Cubic } from "./smoothing";
 
@@ -35,9 +35,10 @@ export interface VectorizeResult {
   marks: Mark[];
   /** USM used: 0 none, 1 surgery attempted, 2 detail kept only (see autoUsm). */
   usm: Uint8Array;
-  /** Region label per cell, and the surgery's outcome per label. */
+  /** Region label per cell, and the surgery's outcome and explanation per label. */
   regionLabels: Int32Array;
   regionStatus: Uint8Array;
+  regionInfo: RegionInfo[];
   /** Segments before stroke grouping, input-pixel units. */
   segments: number[];
   timings: Record<string, number>;
@@ -112,6 +113,7 @@ export function finish(prep: Prepared, marks: Mark[], usm: Uint8Array, options: 
     usm,
     regionLabels: res.labels,
     regionStatus: res.status,
+    regionInfo: res.info,
     segments: segs2x.map((v) => v / 2),
     timings,
   };

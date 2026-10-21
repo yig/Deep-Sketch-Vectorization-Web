@@ -4,7 +4,7 @@
 // `onChange`; the worker re-runs the fast finishing stage on the whole state (no incremental
 // bookkeeping), and `applyResult` takes back the worker's snapped keypoint positions and statuses.
 
-import { CellStatus, type EditState, type RunResult } from "./protocol";
+import { CellStatus, type EditState, type RegionInfo, type RunResult } from "./protocol";
 
 export type Tool = "pan" | "keypoint" | "brush" | "eraser" | "lasso";
 export type MarkType = 1 | 2 | 3;
@@ -27,6 +27,8 @@ const STATUS_RGBA: Record<number, [number, number, number, number]> = {
 };
 const PENDING_RGBA: [number, number, number, number] = [37, 99, 235, 110];
 
+const e_isOverToolbar = (x: number, y: number) => !!document.elementFromPoint(x, y)?.closest(".toolbar");
+
 const cloneState = (s: EditState): EditState => ({ marks: s.marks.map((m) => ({ ...m })), usm: s.usm.slice() });
 
 export class Editor {
@@ -40,6 +42,8 @@ export class Editor {
   version = 0;
   onChange: () => void = () => {};
   onStatus: (text: string) => void = () => {};
+  /** The region under the cursor changed (null: none). */
+  onHover: (info: { info: RegionInfo; status: number } | null) => void = () => {};
 
   private state: EditState | null = null;
   private auto: EditState | null = null;
@@ -54,6 +58,9 @@ export class Editor {
   // View: canvas top-left in stage coordinates and displayed width.
   private view = { x: 0, y: 0, w: 0, fitted: false };
   private spaceHeld = false;
+  /** Region label under the cursor (from the last result), 0 if none. */
+  private hoverLabel = 0;
+  private lastMouse: { x: number; y: number } | null = null;
 
   constructor(private els: EditorElements) {
     this.bindPointer();
@@ -111,6 +118,10 @@ export class Editor {
       // Adopt the worker's snapped keypoint positions (same order as sent).
       this.state.marks = result.marks.map((m) => ({ ...m }));
     }
+    // Labels and explanations changed: refresh the hover.
+    this.hoverLabel = -1;
+    if (this.lastMouse) this.updateHover(this.lastMouse.x, this.lastMouse.y);
+    else this.setHover(0);
     this.render();
   }
 
@@ -292,7 +303,10 @@ export class Editor {
     });
 
     stage.addEventListener("pointermove", (e) => {
-      if (mode === "none") return;
+      if (mode === "none") {
+        if (e.pointerType === "mouse") this.updateHover(e.clientX, e.clientY);
+        return;
+      }
       if (mode === "pan") {
         this.view.x += e.clientX - last.x;
         this.view.y += e.clientY - last.y;
@@ -333,6 +347,10 @@ export class Editor {
       draft = null;
     };
     stage.addEventListener("pointerup", end);
+    stage.addEventListener("pointerleave", () => {
+      this.lastMouse = null;
+      this.setHover(0);
+    });
     stage.addEventListener("pointercancel", () => {
       // Abandon the gesture.
       if (mode === "lasso") this.renderLasso([], false);
@@ -354,6 +372,25 @@ export class Editor {
       this.selected = hit;
       this.commit(next);
     });
+  }
+
+  private updateHover(clientX: number, clientY: number) {
+    this.lastMouse = { x: clientX, y: clientY };
+    const r = this.result;
+    const g = this.grid;
+    if (!r || !g || this.tool === "pan" || (e_isOverToolbar(clientX, clientY))) return this.setHover(0);
+    const p = this.toSource(clientX, clientY);
+    const i = Math.floor(p.y / g.cell);
+    const j = Math.floor(p.x / g.cell);
+    this.setHover(i >= 0 && j >= 0 && i < g.h && j < g.w ? r.regionLabels[i * g.w + j] : 0);
+  }
+
+  private setHover(label: number) {
+    if (label === this.hoverLabel) return;
+    this.hoverLabel = label;
+    const r = this.result;
+    this.onHover(label && r ? { info: r.regionInfo[label], status: r.cellStatus[r.regionLabels.indexOf(label)] } : null);
+    this.render();
   }
 
   private hitMark(x: number, y: number): number {
@@ -477,11 +514,14 @@ export class Editor {
     const ctx = cv.getContext("2d")!;
     const img = ctx.createImageData(r.gridW, r.gridH);
     const sameGrid = r.usm.length === state.usm.length;
+    const hover = this.hoverLabel;
     for (let p = 0; p < state.usm.length; p++) {
       const v = state.usm[p];
       if (!v) continue;
-      const rgba = sameGrid && r.usm[p] === v ? STATUS_RGBA[r.cellStatus[p]] ?? PENDING_RGBA : PENDING_RGBA;
+      const settled = sameGrid && r.usm[p] === v;
+      const rgba = settled ? STATUS_RGBA[r.cellStatus[p]] ?? PENDING_RGBA : PENDING_RGBA;
       img.data.set(rgba, 4 * p);
+      if (settled && hover && r.regionLabels[p] === hover) img.data[4 * p + 3] = Math.min(255, rgba[3] * 2);
     }
     ctx.putImageData(img, 0, 0);
     cv.style.width = `${((r.prepared.W * r.scale) / this.srcW) * 100}%`;
@@ -490,17 +530,21 @@ export class Editor {
 
   private renderMarks(state: EditState | null = this.state) {
     const svg = this.els.keypoints;
-    const show = this.showKeypoints || this.tool === "keypoint";
+    const show = this.showKeypoints || this.tool !== "pan";
     svg.style.display = show && state ? "" : "none";
     if (!state || !show) return;
     svg.setAttribute("viewBox", `0 0 ${this.srcW} ${this.srcH}`);
     svg.setAttribute("preserveAspectRatio", "none");
     const k = this.srcPerScreen;
     const r = 4.5 * k;
+    const res = this.result;
+    const hover = this.hoverLabel;
     svg.innerHTML = state.marks
       .map((m, i) => {
         const sel = i === this.selected && this.tool === "keypoint";
+        const inside = hover > 0 && res !== null && m.cell !== null && res.regionLabels[m.cell] === hover;
         return (
+          (inside ? `<circle cx="${m.x}" cy="${m.y}" r="${r + 4 * k}" fill="none" stroke="#facc15" stroke-width="${2.5 * k}"/>` : "") +
           `<circle cx="${m.x}" cy="${m.y}" r="${r}" fill="${MARK_COLORS[m.type]}" fill-opacity="0.9" stroke="#fff" stroke-width="${1.2 * k}"/>` +
           (sel ? `<circle cx="${m.x}" cy="${m.y}" r="${r + 3 * k}" fill="none" stroke="var(--ink)" stroke-width="${1.5 * k}"/>` : "")
         );

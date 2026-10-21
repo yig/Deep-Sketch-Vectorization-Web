@@ -124,6 +124,19 @@ describe.skipIf(fixtures.length === 0)("interactive refinement", () => {
     expect(usm[detail]).toBe(2);
   });
 
+  test("every region is explained", () => {
+    for (const [l, rc] of cells) {
+      const info = auto.regionInfo[l];
+      expect(info.cells).toBe(rc.length);
+      expect(info.explanation.length).toBeGreaterThan(0);
+      const kinds = [0, 0, 0];
+      for (const m of prep.autoMarks) if (auto.regionLabels[m.cell] === l) kinds[m.type - 1]++;
+      expect(info.keypoints).toEqual(kinds);
+      if (auto.regionStatus[l] === RegionStatus.NotApplied) expect(info.explanation).toMatch(/keep only one|add an end point|no non-crossing|no vertices/);
+      if (auto.regionStatus[l] === RegionStatus.Applied) expect(info.entering).toBeGreaterThan(0);
+    }
+  });
+
   test("snapMark snaps to a nearby vertex", () => {
     const { pt, valence } = prep.base;
     const v = valence.findIndex((x) => x > 0);

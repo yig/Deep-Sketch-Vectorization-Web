@@ -213,37 +213,48 @@ function updateLineMaps(
   marks: MarkGrid,
   cps: ConnectionPoint[],
   cells: number[],
-): { applied: boolean; added: Pt[]; usmCells: number[] } | null {
+): { applied: boolean; added: Pt[]; usmCells: number[]; rule: string } | null {
   const valence = cps.length;
   const added: Pt[] = [];
   const { end, sharp, junc, avg } = queryKeypointsByRegion(marks, cells, pt, ptMask);
-  const connect = (p: Pt) => {
+  // `rule` describes what was done, or why nothing could be.
+  let rule = "";
+  const connect = (p: Pt, what: string) => {
     for (const c of cps) added.push(c.pt, p);
+    rule = `lines connected to the ${what}`;
   };
   const connectAvg = () => {
-    if (avg) connect(avg);
+    if (avg) connect(avg, "center of the region's vertices");
+    else rule = "no vertices inside to connect to";
   };
   let update = false;
   if (valence === 0) return null;
   if (valence === 1) {
     if (end.length === 1) {
-      connect(end[0]);
+      connect(end[0], "end point");
       update = true;
-    }
+    } else rule = end.length ? "one line enters: keep only one end point inside" : "one line enters: add an end point inside";
   } else if (valence === 2) {
     update = true;
-    if (sharp.length === 1) connect(sharp[0]);
-    else if (junc.length === 1) connect(junc[0]);
-    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(sharp[0]);
-    else if (sharp.length > 1) update = false;
-    else added.push(cps[0].pt, cps[1].pt);
+    if (sharp.length === 1) connect(sharp[0], "sharp turn");
+    else if (junc.length === 1) connect(junc[0], "junction");
+    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(sharp[0], "first sharp turn");
+    else if (sharp.length > 1) {
+      update = false;
+      rule = "two lines enter: keep only one sharp turn inside";
+    } else {
+      added.push(cps[0].pt, cps[1].pt);
+      rule = "the two entering lines joined";
+    }
   } else if (valence === 3) {
     update = true;
-    if (junc.length === 1) connect(junc[0]);
-    else if (sharp.length === 1) connect(sharp[0]);
-    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(junc[0]);
-    else if (junc.length > 1) update = false;
-    else {
+    if (junc.length === 1) connect(junc[0], "junction");
+    else if (sharp.length === 1) connect(sharp[0], "sharp turn");
+    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(junc[0], "first junction");
+    else if (junc.length > 1) {
+      update = false;
+      rule = "three lines enter: keep only one junction inside";
+    } else {
       // Join the two most parallel connections; attach the third to their midpoint.
       let bi = 0;
       let bj = 1;
@@ -261,15 +272,17 @@ function updateLineMaps(
       const p0 = cps[bi].pt;
       const p1 = cps[bj].pt;
       added.push(p0, p1, cps[k].pt, [Math.fround(Math.fround(p0[0] + p1[0]) / 2), Math.fround(Math.fround(p0[1] + p1[1]) / 2)]);
+      rule = "T-junction: the two most aligned lines joined, the third attached to the middle";
     }
   } else if (valence === 4) {
     update = true;
-    if (junc.length === 1) connect(junc[0]);
-    else if (sharp.length === 1) connect(sharp[0]);
-    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(junc[0]);
+    if (junc.length === 1) connect(junc[0], "junction");
+    else if (sharp.length === 1) connect(sharp[0], "sharp turn");
+    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(junc[0], "first junction");
     else {
       try {
         xJunction(cps, added);
+        rule = added.length ? "two lines passing each other: entering lines paired by direction" : "four lines enter, but no non-crossing pairing exists: add a junction";
       } catch (e) {
         if (!(e instanceof XJunctionError)) throw e;
         connectAvg();
@@ -277,8 +290,8 @@ function updateLineMaps(
     }
   } else {
     update = true;
-    if (junc.length === 1) connect(junc[0]);
-    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(junc[0]);
+    if (junc.length === 1) connect(junc[0], "junction");
+    else if (end.length >= 1 && sharp.length >= 1 && junc.length >= 1) connect(junc[0], "first junction");
     else connectAvg();
   }
   // The reference asserts here (and would crash the run); treat it as "not refined" instead.
@@ -296,7 +309,7 @@ function updateLineMaps(
       usmCells.push(p);
     }
   }
-  return { applied: update, added, usmCells };
+  return { applied: update, added, usmCells, rule };
 }
 
 const BOX3 = [
@@ -440,6 +453,16 @@ export const RegionStatus = {
   Applied: 3,
 } as const;
 
+export interface RegionInfo {
+  cells: number;
+  /** Polylines entering the region (its valence); -1 if not computed (holes or detail only). */
+  entering: number;
+  /** Keypoints inside: end points, sharp turns, junctions. */
+  keypoints: [number, number, number];
+  /** What the surgery did, or why it did nothing. */
+  explanation: string;
+}
+
 export interface SurgeryResult {
   /** Flat segments [sx, sy, ex, ey, ...] after downsampling, followed by the surgery's segments. */
   lines: number[];
@@ -449,6 +472,8 @@ export interface SurgeryResult {
   labels: Int32Array;
   /** Status per label (index 0 unused). */
   status: Uint8Array;
+  /** Per label (index 0 unused): number of polylines entering, keypoints inside, and an explanation. */
+  info: RegionInfo[];
   /** As refine_topology returns them: region labels, extended by the connection cells when applied. */
   usmApplied: Int32Array;
   usmUncertain: Int32Array;
@@ -495,15 +520,31 @@ export function surgery(base: DCBase, marks: Mark[], usm: Uint8Array, downRate: 
   for (let p = 0; p < n; p++) hasVertex[p] = valence[p] !== 0 ? 1 : 0;
 
   const refinedLines: number[] = [];
+  const info: RegionInfo[] = [{ cells: 0, entering: -1, keypoints: [0, 0, 0], explanation: "" }];
   for (let idx = 1; idx <= count; idx++) {
-    if (!active[idx]) continue;
     const rc = cells[idx];
+    const kinds: [number, number, number] = [0, 0, 0];
+    for (const p of rc) if (grid.type[p]) kinds[grid.type[p] - 1]++;
+    const item: RegionInfo = { cells: rc.length, entering: -1, keypoints: kinds, explanation: "" };
+    info.push(item);
+    if (!active[idx]) {
+      item.explanation = "kept at full resolution, not rebuilt (paint over it to rebuild it)";
+      continue;
+    }
     status[idx] = RegionStatus.Invalid;
     // Polylines entering from a neighboring detail-only region count as entering this one.
     const cps = findConnectionPoints(hasVertex, pt, rc, surgeryCells, h, w);
-    if (cps === null) continue;
+    if (cps === null) {
+      item.explanation = "its outline has holes: fill them in to rebuild it";
+      continue;
+    }
+    item.entering = cps.length;
     const r = updateLineMaps(lx, ly, pt, ptMask, grid, cps, rc);
-    if (r === null) continue;
+    if (r === null) {
+      item.explanation = "no lines enter it";
+      continue;
+    }
+    item.explanation = r.rule;
     status[idx] = r.applied ? RegionStatus.Applied : RegionStatus.NotApplied;
     const target = r.applied ? usmApplied : usmUncertain;
     for (const p of r.usmCells) target[p] = idx;
@@ -517,7 +558,7 @@ export function surgery(base: DCBase, marks: Mark[], usm: Uint8Array, downRate: 
   const debug = keepDebug ? { usmRegions, valence, ptType: grid.type.slice(), lineMapX: cloneLineMap(lx), lineMapY: cloneLineMap(ly) } : null;
   const lines = count === 0 ? lineMapsToSegments(lx, ly) : downsampleAll(base.edges, pt, usmRegions, valence, grid.type, lx, ly, downRate);
   lines.push(...refinedLines);
-  return { lines, refined, labels, status, usmApplied, usmUncertain, debug };
+  return { lines, refined, labels, status, info, usmApplied, usmUncertain, debug };
 }
 
 /** Keypoint lists (flat x, y) from marks, in mark order. */

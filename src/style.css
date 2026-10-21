@@ -388,6 +388,10 @@ button.link {
   text-align: center;
   pointer-events: none;
 }
+.edit-hint.info {
+  color: var(--ink);
+  border-color: var(--accent);
+}
 .stage.dragging {
   outline: 3px dashed var(--accent);
   outline-offset: -12px;

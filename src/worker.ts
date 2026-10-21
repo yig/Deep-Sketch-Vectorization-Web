@@ -77,6 +77,8 @@ async function run(req: RunRequest) {
       marks: marks.map((m) => ({ type: m.type, cell: m.cell, x: m.x * scale, y: m.y * scale })),
       usm: usmOut,
       cellStatus,
+      regionLabels: res.regionLabels,
+      regionInfo: res.regionInfo,
       regions,
       gridW: prep.w,
       gridH: prep.h,
@@ -86,7 +88,7 @@ async function run(req: RunRequest) {
       device: nets.device.description,
       tiles: { udf: nets.udfTile, ndc: nets.ndcTile },
     },
-    [usmOut.buffer, cellStatus.buffer],
+    [usmOut.buffer, cellStatus.buffer, res.regionLabels.buffer],
   );
 }
 

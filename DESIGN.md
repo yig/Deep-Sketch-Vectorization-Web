@@ -181,12 +181,13 @@ Current fixtures: three light-model and one full-model run on `../SketchVG/png_h
 - **structural:** stroke grouping (§7, deviation 1). Every stroke segment must be an input segment;
   covered segments within 5% of the reference, and stroke count within 25%.
 
-`tests/editing.test.ts` (7 tests) checks the editing semantics on a fixture's network outputs:
+`tests/editing.test.ts` (8 tests) checks the editing semantics on a fixture's network outputs:
 - the automatic pass equals `surgery(autoMarks, autoUsm)`;
 - erasing a refined region removes its surgery, and restoring the USM gives the automatic result back;
 - adding a keypoint to an unrefined region makes it refinable;
 - painting a new region over a line rebuilds it;
 - painting next to a detail-only region keeps it separate;
+- every region is explained, with keypoint counts matching the marks;
 - `snapMark` snaps or keeps the position.
 
 `tests/e2e.test.ts` (`npm run test:e2e`) runs the ONNX models in onnxruntime-web (WASM, Node) with
@@ -267,6 +268,10 @@ Semantics:
 - The surgery rules are the reference's `update_line_maps` with `full_auto_mode` branches. For
   example, a region two polylines enter is rebuilt by joining them, and with one junction keypoint
   every entering polyline is connected to it.
+- **Explanations.** `surgery` returns per region the number of polylines entering, the keypoints
+  inside, and which rule rebuilt it or why none applied, for example "three lines enter: keep only
+  one junction inside". With an editing tool, hovering a region highlights it and its keypoints
+  (yellow rings) and shows this in the hint bar.
 - **Status per region**, shown as USM color: refined (orange), no rule applies with the keypoints
   inside, e.g. several junctions (red), not refinable because the region has holes or nothing enters
   it (gray), detail only (purple). Unprocessed edits show as pending (blue).
@@ -294,7 +299,6 @@ strip along the roof with its original lines. Undo, redo, reset, eraser, and kee
 ## 9. Next steps
 
 - Editing polish:
-  - show which keypoints are inside which region, and why a region is not refined;
   - pinch zoom on touch screens.
 - Downloading the edit state (marks + USM) to resume later.
 - fp16 models for the full variant (half the download). This needs an accuracy check against fp32,

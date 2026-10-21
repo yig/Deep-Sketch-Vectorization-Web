@@ -77,6 +77,22 @@ editor.onChange = () => {
 };
 editor.onStatus = (t) => setStatus(t);
 
+const STATUS_WORDS: Record<number, string> = { 1: "Detail only", 2: "Can't rebuild", 3: "Not rebuilt", 4: "Rebuilt" };
+let hoverText: string | null = null;
+editor.onHover = (h) => {
+  if (!h) hoverText = null;
+  else {
+    const { info, status } = h;
+    const [e, s, j] = info.keypoints;
+    const kp = [e && `${e} end point${e > 1 ? "s" : ""}`, s && `${s} sharp turn${s > 1 ? "s" : ""}`, j && `${j} junction${j > 1 ? "s" : ""}`].filter(Boolean).join(", ");
+    const parts = [`${info.cells} cells`];
+    if (info.entering >= 0) parts.push(`${info.entering} line${info.entering === 1 ? "" : "s"} entering`);
+    parts.push(kp ? `keypoints inside: ${kp}` : "no keypoints inside");
+    hoverText = `${STATUS_WORDS[status] ?? "Region"}: ${info.explanation}. (${parts.join(" · ")})`;
+  }
+  updateToolbar();
+};
+
 const model = () => (document.querySelector<HTMLInputElement>('input[name="model"]:checked')!.value as "light" | "full");
 const options = (): VectorizeOptions => ({
   downRate: Number(ui.downRate.value),
@@ -266,7 +282,8 @@ function updateToolbar() {
   ui.redo.disabled = !editor.canRedo;
   ui.resetEdits.disabled = !editor.isEdited;
   ui.editHint.hidden = !source;
-  ui.editHint.textContent = HINTS[editor.tool];
+  ui.editHint.textContent = hoverText ?? HINTS[editor.tool];
+  ui.editHint.classList.toggle("info", hoverText !== null);
 }
 
 for (const b of ui.toolbar.querySelectorAll<HTMLButtonElement>("[data-tool]")) b.addEventListener("click", () => setTool(b.dataset.tool as Tool));
