@@ -72,8 +72,7 @@ function alignTo(g: Graph, valence: Int32Array, keep: (v: number) => boolean, ke
 
 /**
  * Group segments (flat [sx, sy, ex, ey, ...], zero-length segments already removed) into polylines.
- * `keypoints` are compared against segment coordinates as-is (see DESIGN.md: the reference passes
- * 1x keypoints with 2x segment coordinates).
+ * `keypoints` must be in the same units as the segments.
  */
 export function groupStrokes(segments: ArrayLike<number>, keypoints: Keypoints | null, skipLen = 4): Polyline[] {
   const g = new Graph(segments);

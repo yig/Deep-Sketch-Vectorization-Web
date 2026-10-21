@@ -32,6 +32,22 @@ from utils.keypt_tools import udf_filter, extract_keypts  # noqa: E402
 ST.sample = lambda population, k: list(population)[:k]
 
 
+def _fix_downsample_all():
+    """Reference bug: `usm_downsample[r_mask] = False` indexes with a uint8 array, which NumPy treats as
+    row indices (clearing coarse rows 0 and 1) instead of a boolean mask. The browser port fixes it;
+    patch the reference the same way so the fixtures stay comparable."""
+    import inspect
+    import textwrap
+    src = textwrap.dedent(inspect.getsource(NT.downsample_all))
+    bad = "usm_downsample[r_mask] = False"
+    assert src.count(bad) == 1
+    src = src.replace(bad, "usm_downsample[r_mask.astype(bool)] = False")
+    exec(compile(src, "<downsample_all, patched by make_fixtures.py>", "exec"), NT.__dict__)
+
+
+_fix_downsample_all()
+
+
 def save(d, name, arr):
     np.save(os.path.join(d, name + ".npy"), np.ascontiguousarray(arr))
 
@@ -175,7 +191,9 @@ def run(image_path, variant, out_root, resize_to=512, down_rate=8, skip_len=4, e
         NT.lines_to_svg(lines_refine * 2, w * 2, h * 2, svg)
         paths, _ = ST.open_svg_flatten(svg)
         save(d, "grouping_in", np.array([[[p.start.real, p.start.imag], [p.end.real, p.end.imag]] for p in paths], np.float64))
-        strokes, _ = ST.simplify_graph(paths, keypts, mode="hybird", skip_len=skip_len)
+        # Reference bug: simplify_SVG passes 1x keypoints with 2x SVG coordinates. Fixed: scale them.
+        keypts2x = {k: np.asarray(v) * 2 for k, v in keypts.items()}
+        strokes, _ = ST.simplify_graph(paths, keypts2x, mode="hybird", skip_len=skip_len)
         save_json(d, "strokes", paths_json(strokes))
         save_json(d, "strokes_rdp", paths_json(ST.ramerDouglas(strokes, eps)))
         # ST.fitBezier raises AttributeError (calls .length() on a list); the reference swallows it in

@@ -70,8 +70,9 @@ export function vectorizeFromNetworks(net: NetworkOutputs, options: Partial<Vect
     const [a, b, c, d] = [res.lines[k] * 2, res.lines[k + 1] * 2, res.lines[k + 2] * 2, res.lines[k + 3] * 2];
     if (a !== c || b !== d) segs2x.push(a, b, c, d);
   }
-  // Parity with the reference: 1x keypoints against 2x coordinates (see DESIGN.md, known issues).
-  let strokes = groupStrokes(segs2x, res.keypoints, opt.skipLen);
+  // Keypoints in the same 2x units as the segments. (The reference passes 1x keypoints here; fixed.)
+  const x2 = (a: number[]) => a.map((v) => v * 2);
+  let strokes = groupStrokes(segs2x, { end: x2(res.keypoints.end), sharp: x2(res.keypoints.sharp), junc: x2(res.keypoints.junc) }, opt.skipLen);
   lap("grouping");
   let beziers: Cubic[][] | null = null;
   if (opt.smoothing === "rdp") strokes = strokes.map((s) => rdp(s, opt.rdpEpsilon));

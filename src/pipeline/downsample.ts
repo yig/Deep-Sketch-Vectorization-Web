@@ -110,17 +110,19 @@ export function downsampleAll(
   const usmDownsample = new Uint8Array(nd);
   for (let q = 0; q < nd; q++) usmDownsample[q] = left2[q] || usmRight[q] || top2[q] || usmBottom[q] || four2[q] || usmXY[q] ? 1 : 0;
 
-  // Intended: drop new USM regions that contain no keypoint. The reference indexes with a uint8
-  // array (`usm_downsample[r_mask] = False`), which NumPy treats as integer row indices, so the
-  // actual effect is clearing coarse rows 0 and 1. Reproduced for parity with the reference.
+  // Drop USM regions introduced by the downsampling that contain no keypoint. (The reference
+  // indexes with a uint8 mask here, which NumPy treats as row indices; fixed.) Regions are found on
+  // the fine grid; each coarse block lies in a single region.
   {
     const fine = upsample(usmDownsample, hd, wd, r);
     const { labels, count } = connectedComponents(fine, h, w, 4);
     const hasKey = new Uint8Array(count + 1);
     for (let p = 0; p < h * w; p++) if (labels[p] && ptType[p] > 0) hasKey[labels[p]] = 1;
-    let clear = false;
-    for (let l = 1; l <= count; l++) if (!hasKey[l]) clear = true;
-    if (clear) for (let q = 0; q < Math.min(2, hd) * wd; q++) usmDownsample[q] = 0;
+    for (let I = 0; I < hd; I++)
+      for (let J = 0; J < wd; J++) {
+        const l = labels[I * r * w + J * r];
+        if (l && !hasKey[l]) usmDownsample[I * wd + J] = 0;
+      }
   }
 
   let usmDown = new Uint8Array(nd);

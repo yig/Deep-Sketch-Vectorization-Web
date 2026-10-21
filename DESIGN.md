@@ -6,7 +6,8 @@ Vectorization via Implicit Surface Extraction* (Yan et al., SIGGRAPH 2024; paper
 
 **Status (2026-10-22):** the automatic pipeline, equivalent to `predict_s1.py`, runs in the browser
 on WebGPU or WebAssembly. Every post-processing stage matches the Python reference on golden
-fixtures. Interactive refinement (editing keypoints and the USM) is the next milestone.
+fixtures (reference with two bug fixes applied, §7). Interactive refinement (editing keypoints and
+the USM) is the next milestone. Commit `14b4fec` is the bug-for-bug parity version.
 
 ## 1. Quick start
 
@@ -173,8 +174,8 @@ Current fixtures: three light-model and one full-model run on `../SketchVG/png_h
 tiling, then the TypeScript pipeline. It passes on all fixtures: UDF and aux within 1e-3 of PyTorch,
 no edge-flag flips, and segments identical to the reference's grouping input.
 
-The deployed app was also driven in headless Chrome (Playwright, WebGPU and WASM). On the procedural
-sample, the reference produces 54 strokes and the port 55. The stroke fragmentation seen with "Color
+The deployed app was also driven in headless Chrome (Playwright, WebGPU and WASM). Before the bug
+fixes, on the procedural sample, the reference produced 54 strokes and the port 55. The stroke fragmentation seen with "Color
 strokes" is present in the reference too.
 
 ## 7. Known issues
@@ -193,18 +194,27 @@ strokes" is present in the reference too.
    `.length()` on a list), and `simplify_SVG` swallows it, so `--bezier` is a silent no-op there.
    The port runs the underlying Schneider fit (`fitCurve(points, 0.1)`).
 
-### Reference bugs reproduced for parity (candidates to fix, pending discussion)
+### Reference bugs fixed (2026-10-22)
 
-1. `downsample_all`: `usm_downsample[r_mask] = False` indexes with a **uint8** array. NumPy treats
-   that as integer row indices, so instead of dropping keypoint-free USM regions it clears coarse
-   rows 0 and 1 (whenever any region lacks a keypoint).
-2. Stroke grouping receives keypoints in **1× pixel units** but segments in **2× SVG units**, so its
-   keypoint alignment (end/sharp/junction start points) matches the wrong vertices.
-3. `refine_topology` only aligns junction keypoints to valence-3 vertices (plus a pass at valence 2),
+The fixtures are generated from the reference with the same fixes patched in (`tools/make_fixtures.py`),
+so the golden tests still compare like with like. For bug-for-bug parity with the reference, check
+out commit `14b4fec`.
+
+1. `downsample_all`: `usm_downsample[r_mask] = False` indexed with a **uint8** array, which NumPy
+   treats as integer row indices: it cleared coarse rows 0 and 1 instead of dropping the
+   keypoint-free USM regions. Fixed: those regions are dropped. On the four fixtures, 40–65% of the
+   downsampling's USM regions had no keypoint, and the fix cuts the segment count by 20–30%.
+2. Stroke grouping received keypoints in **1× pixel units** but segments in **2× SVG units**, so its
+   keypoint alignment matched the wrong vertices. Fixed: keypoints are scaled to 2×. The alignment
+   thresholds (1.5, 1.5, 5) are kept, now in 2× units.
+
+### Remaining reference quirks (kept)
+
+1. `refine_topology` only aligns junction keypoints to valence-3 vertices (plus a pass at valence 2),
    never valence 4.
-4. Schneider fitting puts control points far outside the curve for tiny segments: overshooting
+2. Schneider fitting puts control points far outside the curve for tiny segments: overshooting
    control points that, rendered, would show as loops. It's visible only with Bézier smoothing.
-5. Grouping quality: straight edges often split into several strokes, and parallel duplicate segments
+3. Grouping quality: straight edges often split into several strokes, and parallel duplicate segments
    survive along some lines (also in the reference output).
 
 ## 8. Next steps
@@ -212,7 +222,6 @@ strokes" is present in the reference too.
 - Interactive refinement: edit keypoints and USM regions, then re-run `refine_topology` in manual
   mode on the changed regions only, with undo. That needs the manual-mode branches of
   `update_line_maps` / `query_keypt_by_region_no_alginment` and `update_usm`.
-- Decide which reference bugs (§7) to fix, behind a "reference parity" switch.
 - fp16 models for the full variant (half the download). This needs an accuracy check against fp32,
   since a flipped edge flag changes topology.
 - Hosting: the models could be served from Hugging Face (`VITE_MODEL_BASE`) instead of the site.

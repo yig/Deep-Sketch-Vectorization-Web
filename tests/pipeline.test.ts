@@ -156,7 +156,7 @@ describe.skipIf(fixtures.length === 0)("golden fixtures", () => {
 
     test("stroke grouping (structural)", () => {
       const segs = Array.from(npy("grouping_in").data as Float64Array);
-      const strokes = groupStrokes(segs, kp(json("keypts_aligned")), meta.skip_len);
+      const strokes = groupStrokes(segs, kp(json("keypts_aligned"), 2), meta.skip_len);
       const ref = json("strokes") as number[][][][];
       const key = (ax: number, ay: number, bx: number, by: number) =>
         ax < bx || (ax === bx && ay < by) ? `${ax},${ay},${bx},${by}` : `${bx},${by},${ax},${ay}`;
