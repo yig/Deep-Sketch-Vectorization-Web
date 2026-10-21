@@ -84,15 +84,19 @@
             <span>Input opacity <output id="opacityOut">35%</output></span>
             <input id="opacity" type="range" min="0" max="100" step="5" value="35" />
           </label>
+          <label class="check"><input id="showVector" type="checkbox" checked /> Vector output</label>
           <label class="check"><input id="colorStrokes" type="checkbox" checked /> Color strokes</label>
           <label class="check"><input id="showKeypoints" type="checkbox" /> Keypoints</label>
-          <label class="check"><input id="showUsm" type="checkbox" /> Under-sampling map</label>
+          <label class="check"><input id="showUsm" type="checkbox" /> Under-sampling map (USM)</label>
           <div class="legend" id="legend" hidden>
-            <span><i class="dot end"></i>end</span>
-            <span><i class="dot sharp"></i>sharp</span>
+            <span><i class="dot end"></i>end point</span>
+            <span><i class="dot sharp"></i>sharp turn</span>
             <span><i class="dot junc"></i>junction</span>
-            <span><i class="sq usm"></i>USM</span>
-            <span><i class="sq usm2"></i>refined</span>
+            <span><i class="sq applied"></i>USM, refined</span>
+            <span><i class="sq notapplied"></i>USM, needs a keypoint</span>
+            <span><i class="sq invalid"></i>USM, can't refine (hole)</span>
+            <span><i class="sq detail"></i>detail kept only</span>
+            <span><i class="sq pending"></i>pending</span>
           </div>
         </section>
 
@@ -116,6 +120,31 @@
             <button id="sample" class="link">or try a sample sketch</button>
           </div>
         </div>
+        <div class="toolbar" id="toolbar" hidden>
+          <div class="group" role="radiogroup" aria-label="Tool">
+            <button data-tool="pan" title="Pan and zoom (V; hold Space with any tool)">Pan</button>
+            <button data-tool="keypoint" title="Edit keypoints (K)">Keypoints</button>
+            <button data-tool="brush" title="Paint the under-sampling map (B)">USM brush</button>
+            <button data-tool="eraser" title="Erase the under-sampling map (E)">Eraser</button>
+          </div>
+          <div class="group" id="markTypes" role="radiogroup" aria-label="Keypoint type" hidden>
+            <button data-type="1" title="End point (1)"><i class="dot end"></i>End</button>
+            <button data-type="2" title="Sharp turn (2)"><i class="dot sharp"></i>Sharp</button>
+            <button data-type="3" title="Junction (3)"><i class="dot junc"></i>Junction</button>
+          </div>
+          <label class="group size" id="brushField" hidden>Size <input id="brushSize" type="range" min="1" max="20" step="0.5" value="3" /></label>
+          <div class="group">
+            <button id="undo" title="Undo (⌘Z / Ctrl+Z)" disabled>Undo</button>
+            <button id="redo" title="Redo (⇧⌘Z / Ctrl+Y)" disabled>Redo</button>
+            <button id="resetEdits" title="Back to the automatic result" disabled>Reset</button>
+          </div>
+          <div class="group">
+            <button id="zoomOut" title="Zoom out (−)">−</button>
+            <button id="zoomFit" title="Fit (0)">Fit</button>
+            <button id="zoomIn" title="Zoom in (+)">+</button>
+          </div>
+        </div>
+        <p class="edit-hint" id="editHint" hidden></p>
         <div class="canvas" id="canvas" hidden>
           <img id="input" alt="Input sketch" />
           <canvas id="usm" class="overlay"></canvas>

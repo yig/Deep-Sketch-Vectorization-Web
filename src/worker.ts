@@ -1,56 +1,17 @@
 // Web Worker: runs the networks and the post-processing off the main thread.
-// Network outputs are cached per (image, model, size) so changing post-processing options is cheap.
+// Network outputs and everything derived from them alone are cached per (image, model, size), so
+// option changes and edits only re-run the fast finishing stage.
 
-import { detectDevice, loadNetworks, setAppBase, type DeviceOverrides, type ModelVariant } from "./inference/session";
+import { detectDevice, loadNetworks, setAppBase } from "./inference/session";
 import { runNdcTiled, runUdfTiled, NDC_HALO, UDF_HALO } from "./inference/tiling";
 import { prepareImage, type PreparedImage } from "./pipeline/image";
-import { toSvg, vectorizeFromNetworks, type NetworkOutputs, type VectorizeOptions } from "./pipeline/vectorize";
-import type { Keypoints } from "./pipeline/keypoints";
-
-export interface RunRequest {
-  type: "run";
-  id: number;
-  /** Grayscale source image (8-bit). */
-  gray: Uint8Array;
-  width: number;
-  height: number;
-  /** Identifies the image content, for caching network outputs. */
-  imageKey: string;
-  model: ModelVariant;
-  maxSide: number;
-  options: VectorizeOptions;
-}
-
-export type WorkerRequest = { type: "init"; appBase: string; overrides: DeviceOverrides } | RunRequest;
-
-export interface RunResult {
-  type: "result";
-  id: number;
-  svg: string;
-  /** Strokes in source-image pixels. */
-  strokes: number[][];
-  keypoints: Keypoints;
-  /** USM on the 2x grid of the prepared image: 0 none, 1 predicted, 2 refined by surgery. */
-  usm: Uint8Array;
-  gridW: number;
-  gridH: number;
-  /** Source pixels per prepared-image pixel. */
-  scale: number;
-  prepared: { W: number; H: number; resizedW: number; resizedH: number };
-  timings: Record<string, number>;
-  device: string;
-  tiles: { udf: number; ndc: number };
-}
-
-export type WorkerResponse =
-  | { type: "ready"; device: string }
-  | { type: "progress"; id: number; message: string; frac: number }
-  | RunResult
-  | { type: "error"; id: number; message: string };
+import { finish, prepare, toSvg, type Prepared } from "./pipeline/vectorize";
+import { RegionStatus, snapMark, type Mark } from "./pipeline/topology";
+import { CellStatus, type RunRequest, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
 
-let cached: { key: string; prepared: PreparedImage; net: NetworkOutputs; timings: Record<string, number> } | null = null;
+let cached: { key: string; image: PreparedImage; prep: Prepared; timings: Record<string, number> } | null = null;
 
 async function run(req: RunRequest) {
   const progress = (message: string, frac: number) => post({ type: "progress", id: req.id, message, frac });
@@ -59,9 +20,9 @@ async function run(req: RunRequest) {
   if (cached?.key !== key) {
     cached = null;
     const t0 = performance.now();
-    const prepared = prepareImage(req.gray, req.width, req.height, req.maxSide);
-    const { H, W } = prepared;
-    const { udf, aux } = await runUdfTiled(nets.udf, prepared.data, H, W, { tile: nets.udfTile, halo: UDF_HALO }, (k, n) =>
+    const image = prepareImage(req.gray, req.width, req.height, req.maxSide);
+    const { H, W } = image;
+    const { udf, aux } = await runUdfTiled(nets.udf, image.data, H, W, { tile: nets.udfTile, halo: UDF_HALO }, (k, n) =>
       progress(`Distance field network: tile ${k + 1} / ${n}`, k / n),
     );
     const t1 = performance.now();
@@ -69,34 +30,63 @@ async function run(req: RunRequest) {
       progress(`Line reconstruction network: tile ${k + 1} / ${n}`, k / n),
     );
     const t2 = performance.now();
-    cached = { key, prepared, net: { H, W, aux, edge, offset }, timings: { "distance field network": t1 - t0, "line network": t2 - t1 } };
+    progress("Post-processing", 1);
+    const prep = prepare({ H, W, aux, edge, offset });
+    cached = { key, image, prep, timings: { "distance field network": t1 - t0, "line network": t2 - t1, ...prep.timings } };
   }
   progress("Post-processing", 1);
-  const { prepared, net } = cached;
-  const res = vectorizeFromNetworks(net, req.options);
-  const scale = prepared.sourceW / prepared.resizedW;
-  const svg = toSvg(res, prepared.sourceW, prepared.sourceH, scale, Math.max(1, scale));
-  const usm = new Uint8Array(res.usm.length);
-  for (let p = 0; p < usm.length; p++) usm[p] = res.usmApplied[p] ? 2 : res.usm[p] ? 1 : 0;
-  const strokes = res.strokes.map((s) => s.map((v) => v * scale));
-  const sc = (a: number[]) => a.map((v) => v * scale);
+  const { image, prep } = cached;
+  const scale = image.sourceW / image.resizedW;
+  const n = prep.h * prep.w;
+
+  const edited = req.edit !== null && req.edit.prepKey === key && req.edit.state.usm.length === n;
+  let marks: Mark[] = prep.autoMarks;
+  let usm = prep.autoUsm;
+  if (edited) {
+    const state = req.edit!.state;
+    usm = state.usm;
+    marks = state.marks.map((m) =>
+      m.cell !== null && m.cell >= 0 && m.cell < n
+        ? { type: m.type, cell: m.cell, x: m.x / scale, y: m.y / scale }
+        : snapMark(prep.base, m.type, m.x / scale, m.y / scale),
+    );
+  }
+  const res = finish(prep, marks, usm, req.options);
+  const svg = toSvg(res, image.sourceW, image.sourceH, scale, Math.max(1, scale));
+
+  const cellStatus = new Uint8Array(n);
+  const regions = { applied: 0, notApplied: 0, invalid: 0 };
+  for (let l = 1; l < res.regionStatus.length; l++) {
+    const s = res.regionStatus[l];
+    if (s === RegionStatus.Applied) regions.applied++;
+    else if (s === RegionStatus.NotApplied) regions.notApplied++;
+    else if (s === RegionStatus.Invalid) regions.invalid++;
+  }
+  const code = [CellStatus.Detail, CellStatus.Invalid, CellStatus.NotApplied, CellStatus.Applied];
+  for (let p = 0; p < n; p++) if (res.regionLabels[p]) cellStatus[p] = code[res.regionStatus[res.regionLabels[p]]];
+  const usmOut = usm.slice();
+
   post(
     {
       type: "result",
       id: req.id,
+      prepKey: key,
+      edited,
       svg,
-      strokes,
-      keypoints: { end: sc(res.keypoints.end), sharp: sc(res.keypoints.sharp), junc: sc(res.keypoints.junc) },
-      usm,
-      gridW: 2 * net.W,
-      gridH: 2 * net.H,
+      strokes: res.strokes.map((s) => s.map((v) => v * scale)),
+      marks: marks.map((m) => ({ type: m.type, cell: m.cell, x: m.x * scale, y: m.y * scale })),
+      usm: usmOut,
+      cellStatus,
+      regions,
+      gridW: prep.w,
+      gridH: prep.h,
       scale,
-      prepared: { W: prepared.W, H: prepared.H, resizedW: prepared.resizedW, resizedH: prepared.resizedH },
+      prepared: { W: image.W, H: image.H, resizedW: image.resizedW, resizedH: image.resizedH },
       timings: { ...cached.timings, ...res.timings },
       device: nets.device.description,
       tiles: { udf: nets.udfTile, ndc: nets.ndcTile },
     },
-    [usm.buffer],
+    [usmOut.buffer, cellStatus.buffer],
   );
 }
 

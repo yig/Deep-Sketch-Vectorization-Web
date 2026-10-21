@@ -10,8 +10,6 @@
   --end: #16a34a;
   --sharp: #dc2626;
   --junc: #2563eb;
-  --usm: rgba(147, 51, 234, 0.35);
-  --usm2: rgba(234, 88, 12, 0.45);
   color-scheme: light dark;
 }
 
@@ -30,6 +28,9 @@
 
 * {
   box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
 }
 
 body {
@@ -243,11 +244,20 @@ button.link {
 .dot.junc {
   background: var(--junc);
 }
-.sq.usm {
-  background: var(--usm);
+.sq.applied {
+  background: rgba(234, 88, 12, 0.55);
 }
-.sq.usm2 {
-  background: var(--usm2);
+.sq.notapplied {
+  background: rgba(220, 38, 38, 0.55);
+}
+.sq.invalid {
+  background: rgba(107, 114, 128, 0.6);
+}
+.sq.detail {
+  background: rgba(147, 51, 234, 0.3);
+}
+.sq.pending {
+  background: rgba(37, 99, 235, 0.45);
 }
 
 .status p {
@@ -285,12 +295,95 @@ button.link {
 .stage {
   position: relative;
   background: var(--stage);
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
   min-width: 0;
+  touch-action: none;
+}
+.stage[data-tool="pan"],
+.stage.panning {
+  cursor: grab;
+}
+.stage.panning {
+  cursor: grabbing;
+}
+.stage[data-tool="keypoint"],
+.stage[data-tool="brush"],
+.stage[data-tool="eraser"] {
+  cursor: crosshair;
+}
+
+.toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: none;
+}
+.toolbar .group {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+.toolbar button {
+  border: 0;
+  background: none;
+  color: var(--ink);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.toolbar button:hover:not(:disabled) {
+  background: var(--bg);
+}
+.toolbar button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.toolbar .size {
+  padding: 3px 10px;
+  font-size: 13px;
+  gap: 8px;
+}
+.toolbar .size input {
+  width: 110px;
+}
+.edit-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  margin: 0;
+  max-width: calc(100% - 24px);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+  pointer-events: none;
 }
 .stage.dragging {
   outline: 3px dashed var(--accent);
@@ -313,8 +406,7 @@ button.link {
 }
 
 .canvas {
-  position: relative;
-  flex: none;
+  position: absolute;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.08);
 }
@@ -332,6 +424,7 @@ button.link {
 }
 #usm {
   image-rendering: pixelated;
+  inset: 0 auto auto 0;
 }
 #vector svg {
   width: 100%;

@@ -2,7 +2,7 @@
 
 import { edgeMapFromLogits, lineMaps, refineEdgeMap, vertexMapFromOffsets } from "./dualContouring";
 import { extractKeypoints, underSamplingMap, type Keypoints } from "./keypoints";
-import { refineTopology } from "./topology";
+import { autoMarks, autoUsm, dcBase, marksToKeypoints, surgery, type DCBase, type Mark } from "./topology";
 import { groupStrokes, type Polyline } from "./grouping";
 import { fitBezier, rdp, type Cubic } from "./smoothing";
 
@@ -31,36 +31,62 @@ export interface VectorizeResult {
   strokes: Polyline[];
   /** Bézier fits per stroke when smoothing = "bezier". */
   beziers: Cubic[][] | null;
-  /** Detected keypoints (input-pixel units), before alignment. */
-  keypoints: Keypoints;
-  /** Under-sampling map on the 2x grid as predicted, and the regions where surgery was applied. */
+  /** Keypoints used (input-pixel units). */
+  marks: Mark[];
+  /** USM used: 0 none, 1 surgery attempted, 2 detail kept only (see autoUsm). */
   usm: Uint8Array;
-  usmApplied: Int32Array;
+  /** Region label per cell, and the surgery's outcome per label. */
+  regionLabels: Int32Array;
+  regionStatus: Uint8Array;
   /** Segments before stroke grouping, input-pixel units. */
   segments: number[];
   timings: Record<string, number>;
 }
 
-export function vectorizeFromNetworks(net: NetworkOutputs, options: Partial<VectorizeOptions> = {}): VectorizeResult {
-  const opt = { ...DEFAULT_OPTIONS, ...options };
-  const h = 2 * net.H;
-  const w = 2 * net.W;
-  const timings: Record<string, number> = {};
+/** Everything that depends only on the network outputs: computed once per image. */
+export interface Prepared {
+  h: number;
+  w: number;
+  base: DCBase;
+  /** Keypoints detected by the network (input-pixel units). */
+  detected: Keypoints;
+  /** The automatic pass's marks and USM: the starting point for editing. */
+  autoMarks: Mark[];
+  autoUsm: Uint8Array;
+  timings: Record<string, number>;
+}
+
+function stopwatch(timings: Record<string, number>) {
   let t = performance.now();
-  const lap = (name: string) => {
+  return (name: string) => {
     const now = performance.now();
     timings[name] = now - t;
     t = now;
   };
+}
 
-  const usm = underSamplingMap(net.aux, h, w);
-  const keypoints = extractKeypoints(net.aux, h, w);
+export function prepare(net: NetworkOutputs): Prepared {
+  const h = 2 * net.H;
+  const w = 2 * net.W;
+  const timings: Record<string, number> = {};
+  const lap = stopwatch(timings);
+  const usmPred = underSamplingMap(net.aux, h, w);
+  const detected = extractKeypoints(net.aux, h, w);
   lap("keypoints");
   const edges = refineEdgeMap(edgeMapFromLogits(net.edge, h, w));
   const pt = vertexMapFromOffsets(net.offset, h, w);
   const { x, y } = lineMaps(edges, pt);
+  const base = dcBase(edges, pt, x, y);
   lap("dual contouring");
-  const res = refineTopology(edges, pt, usm, x, y, keypoints, opt.downRate);
+  return { h, w, base, detected, autoMarks: autoMarks(base, detected).marks, autoUsm: autoUsm(base, usmPred), timings };
+}
+
+/** Topology refinement, downsampling, grouping and smoothing for given marks and USM (fast). */
+export function finish(prep: Prepared, marks: Mark[], usm: Uint8Array, options: Partial<VectorizeOptions> = {}): VectorizeResult {
+  const opt = { ...DEFAULT_OPTIONS, ...options };
+  const timings: Record<string, number> = {};
+  const lap = stopwatch(timings);
+  const res = surgery(prep.base, marks, usm, opt.downRate);
   lap("topology + downsampling");
 
   // The reference writes the segments to an SVG at 2x scale and groups them there; zero-length
@@ -71,8 +97,9 @@ export function vectorizeFromNetworks(net: NetworkOutputs, options: Partial<Vect
     if (a !== c || b !== d) segs2x.push(a, b, c, d);
   }
   // Keypoints in the same 2x units as the segments. (The reference passes 1x keypoints here; fixed.)
+  const kp = marksToKeypoints(marks);
   const x2 = (a: number[]) => a.map((v) => v * 2);
-  let strokes = groupStrokes(segs2x, { end: x2(res.keypoints.end), sharp: x2(res.keypoints.sharp), junc: x2(res.keypoints.junc) }, opt.skipLen);
+  let strokes = groupStrokes(segs2x, { end: x2(kp.end), sharp: x2(kp.sharp), junc: x2(kp.junc) }, opt.skipLen);
   lap("grouping");
   let beziers: Cubic[][] | null = null;
   if (opt.smoothing === "rdp") strokes = strokes.map((s) => rdp(s, opt.rdpEpsilon));
@@ -81,12 +108,21 @@ export function vectorizeFromNetworks(net: NetworkOutputs, options: Partial<Vect
   return {
     strokes: strokes.map((s) => s.map((v) => v / 2)),
     beziers,
-    keypoints,
+    marks,
     usm,
-    usmApplied: res.usmApplied,
+    regionLabels: res.labels,
+    regionStatus: res.status,
     segments: segs2x.map((v) => v / 2),
     timings,
   };
+}
+
+/** The automatic pipeline (predict_s1.py) from the network outputs. */
+export function vectorizeFromNetworks(net: NetworkOutputs, options: Partial<VectorizeOptions> = {}): VectorizeResult {
+  const prep = prepare(net);
+  const res = finish(prep, prep.autoMarks, prep.autoUsm, options);
+  res.timings = { ...prep.timings, ...res.timings };
+  return res;
 }
 
 const fmt = (v: number) => (Math.round(v * 1000) / 1000).toString();

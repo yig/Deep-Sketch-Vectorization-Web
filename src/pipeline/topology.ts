@@ -1,9 +1,12 @@
 // Topology refinement ("USM surgery") from utils/ndc_tools.py: refine_topology, align_keypt,
-// find_connection_points, update_line_maps and helpers. Ported for the automatic pipeline
-// (manual = false, full_auto_mode = true), which is what predict_s1.py's CLI uses.
+// find_connection_points, update_line_maps and helpers.
+//
+// The reference runs surgery incrementally (and differently) for user edits. Here one pure function,
+// `surgery`, maps (marks, USM) to lines, and both the automatic pass and every edited state go through
+// it: the automatic pass is surgery(autoMarks, autoUsm). See DESIGN.md §8.
 
 import { connectedComponents, dilate, erode, regionContour, type Mask } from "./imgproc";
-import { lineMapsToSegments, valenceMap, type EdgeMap, type LineMap } from "./dualContouring";
+import { cloneLineMap, lineMapsToSegments, valenceMap, type EdgeMap, type LineMap } from "./dualContouring";
 import { downsampleAll } from "./downsample";
 import type { Keypoints } from "./keypoints";
 
@@ -16,19 +19,6 @@ interface ConnectionPoint {
   j: number;
   /** 0 top, 1 left, 2 bottom, 3 right (direction from the boundary cell to this neighbor). */
   edge: number;
-}
-
-export interface RefineResult {
-  /** Flat segments [sx, sy, ex, ey, ...]. */
-  lines: number[];
-  /** Added segments per refined USM region label. */
-  refined: Map<number, number[]>;
-  usmApplied: Int32Array;
-  usmUncertain: Int32Array;
-  /** Keypoints after alignment to dual-contouring vertices (used by stroke grouping). */
-  keypoints: Keypoints;
-  /** Inputs handed to downsampleAll, for tests. */
-  debug: { usmRegions: Mask; valence: Int32Array; ptType: Int32Array; lineMapX: LineMap; lineMapY: LineMap } | null;
 }
 
 /**
@@ -133,10 +123,10 @@ function findConnectionPoints(
 /** Matching keypoint vertices of one type inside a region: [] (none), one point, or several. */
 type Match = Pt[];
 
-function queryKeypointsByRegion(ptType: Int32Array, cells: number[], pt: Float32Array, ptMask: Mask) {
+function queryKeypointsByRegion(marks: MarkGrid, cells: number[], pt: Float32Array, ptMask: Mask) {
   const find = (val: number): Match => {
     const res: Match = [];
-    for (const p of cells) if (ptType[p] === val) res.push([pt[2 * p], pt[2 * p + 1]]);
+    for (const p of cells) if (marks.type[p] === val) res.push([marks.pos[2 * p], marks.pos[2 * p + 1]]);
     return res;
   };
   let sx = 0;
@@ -220,13 +210,13 @@ function updateLineMaps(
   ly: LineMap,
   pt: Float32Array,
   ptMask: Mask,
-  ptType: Int32Array,
+  marks: MarkGrid,
   cps: ConnectionPoint[],
   cells: number[],
 ): { applied: boolean; added: Pt[]; usmCells: number[] } | null {
   const valence = cps.length;
   const added: Pt[] = [];
-  const { end, sharp, junc, avg } = queryKeypointsByRegion(ptType, cells, pt, ptMask);
+  const { end, sharp, junc, avg } = queryKeypointsByRegion(marks, cells, pt, ptMask);
   const connect = (p: Pt) => {
     for (const c of cps) added.push(c.pt, p);
   };
@@ -315,62 +305,199 @@ const BOX3 = [
   [1, 1, 1],
 ];
 
-/**
- * refine_topology(..., downsample=True, manual=False, full_auto_mode=True).
- * Mutates lx / ly (USM surgery clears the rebuilt regions) and keypoints are re-aligned.
- */
-export function refineTopology(
-  edges: EdgeMap,
-  pt: Float32Array,
-  usmIn: Mask,
-  lx: LineMap,
-  ly: LineMap,
-  keypointsIn: Keypoints,
-  downRate: number,
-  keepDebug = false,
-): RefineResult {
-  const { h, w } = edges;
-  const n = h * w;
-  const longSide = Math.max(h, w);
+/** Dual contouring result before topology refinement. Never mutated. */
+export interface DCBase {
+  edges: EdgeMap;
+  pt: Float32Array;
+  valence: Int32Array;
+  ptMask: Mask;
+  /** Line maps before surgery. */
+  lx: LineMap;
+  ly: LineMap;
+}
+
+export function dcBase(edges: EdgeMap, pt: Float32Array, lx: LineMap, ly: LineMap): DCBase {
   const { valence, ptMask } = valenceMap(edges);
-  const ptType = new Int32Array(n);
-  const keypoints: Keypoints = {
-    end: alignKeypoints(pt, keypointsIn.end, valence, 1, ptType, 3.5),
-    sharp: alignKeypoints(pt, keypointsIn.sharp, valence, 2, ptType, 3.5),
-    junc: keypointsIn.junc,
+  return { edges, pt, valence, ptMask, lx, ly };
+}
+
+/** A keypoint as the surgery uses it: a type, the grid cell it belongs to, and its position. */
+export interface Mark {
+  /** 1 end point, 2 sharp turn, 3 junction. */
+  type: 1 | 2 | 3;
+  cell: number;
+  x: number;
+  y: number;
+}
+
+/** Marks rasterized on the grid: type per cell (0 none; the last mark in a cell wins) and position. */
+export interface MarkGrid {
+  type: Int32Array;
+  pos: Float64Array;
+}
+
+export function markGrid(marks: Mark[], n: number): MarkGrid {
+  const type = new Int32Array(n);
+  const pos = new Float64Array(2 * n);
+  for (const m of marks) {
+    type[m.cell] = m.type;
+    pos[2 * m.cell] = m.x;
+    pos[2 * m.cell + 1] = m.y;
+  }
+  return { type, pos };
+}
+
+/** Marks from a type grid whose keypoints sit on dual-contouring vertices (raster order). */
+function marksFromTypes(ptType: Int32Array, pt: Float32Array): Mark[] {
+  const marks: Mark[] = [];
+  for (let p = 0; p < ptType.length; p++)
+    if (ptType[p] > 0) marks.push({ type: ptType[p] as 1 | 2 | 3, cell: p, x: pt[2 * p], y: pt[2 * p + 1] });
+  return marks;
+}
+
+/**
+ * The reference's keypoint alignment in refine_topology: snap detected keypoints to vertices of the
+ * matching valence. Returns the resulting marks and the aligned keypoint lists the reference returns.
+ */
+export function autoMarks(base: DCBase, detected: Keypoints): { marks: Mark[]; aligned: Keypoints } {
+  const { pt, valence } = base;
+  const ptType = new Int32Array(valence.length);
+  const aligned: Keypoints = {
+    end: alignKeypoints(pt, detected.end, valence, 1, ptType, 3.5),
+    sharp: alignKeypoints(pt, detected.sharp, valence, 2, ptType, 3.5),
+    junc: detected.junc,
   };
   // T/X junctions are sometimes valence-2 vertices: mark them too (result discarded, as in the reference).
-  alignKeypoints(pt, keypointsIn.junc, valence, 2, ptType, 1.5);
-  keypoints.junc = alignKeypoints(pt, keypointsIn.junc, valence, 3, ptType, 3.5);
+  alignKeypoints(pt, detected.junc, valence, 2, ptType, 1.5);
+  aligned.junc = alignKeypoints(pt, detected.junc, valence, 3, ptType, 3.5);
+  return { marks: marksFromTypes(ptType, pt), aligned };
+}
 
-  const regionsRaw = connectedComponents(usmIn, h, w, 4).labels;
-  const usm = erode(dilate(usmIn, h, w, BOX3), h, w, BOX3);
-  const { labels: regions, count } = connectedComponents(usm, h, w, 4);
+/**
+ * Snap a user-placed keypoint to the nearest dual-contouring vertex within `radius` (input pixels).
+ * Without one, the keypoint keeps its position and belongs to the cell that contains it.
+ */
+export function snapMark(base: DCBase, type: 1 | 2 | 3, x: number, y: number, radius = 1.5): Mark {
+  const { h, w } = base.edges;
+  const { pt, valence } = base;
+  const ci = Math.floor(2 * y);
+  const cj = Math.floor(2 * x);
+  const r = Math.ceil(2 * radius) + 2;
+  let best = radius;
+  let cell = -1;
+  for (let i = Math.max(0, ci - r); i <= Math.min(h - 1, ci + r); i++)
+    for (let j = Math.max(0, cj - r); j <= Math.min(w - 1, cj + r); j++) {
+      const p = i * w + j;
+      if (!valence[p]) continue;
+      const d = Math.hypot(pt[2 * p] - x, pt[2 * p + 1] - y);
+      if (d <= best) {
+        best = d;
+        cell = p;
+      }
+    }
+  if (cell >= 0) return { type, cell, x: pt[2 * cell], y: pt[2 * cell + 1] };
+  const i = Math.min(h - 1, Math.max(0, ci));
+  const j = Math.min(w - 1, Math.max(0, cj));
+  return { type, cell: i * w + j, x, y };
+}
 
+/**
+ * The reference's USM regions for the automatic pass: close the predicted USM (3x3 dilate, then
+ * erode) and label its 4-connected components. Returns 0 (none), 1 (surgery is attempted) or
+ * 2 (kept out of surgery: larger than long side / 50 cells, or closing merged several predicted
+ * regions). Every nonzero cell keeps its fine geometry during downsampling.
+ */
+export function autoUsm(base: DCBase, usmPred: Mask): Uint8Array {
+  const { h, w } = base.edges;
+  const n = h * w;
+  const longSide = Math.max(h, w);
+  const regionsRaw = connectedComponents(usmPred, h, w, 4).labels;
+  const usm = erode(dilate(usmPred, h, w, BOX3), h, w, BOX3);
+  const { labels, count } = connectedComponents(usm, h, w, 4);
+  const size = new Int32Array(count + 1);
+  const raw: Set<number>[] = Array.from({ length: count + 1 }, () => new Set());
+  for (let p = 0; p < n; p++) {
+    if (!labels[p]) continue;
+    size[labels[p]]++;
+    if (regionsRaw[p]) raw[labels[p]].add(regionsRaw[p]);
+  }
+  const out = new Uint8Array(n);
+  for (let p = 0; p < n; p++) {
+    const l = labels[p];
+    if (l) out[p] = size[l] > longSide / 50 || raw[l].size > 1 ? 2 : 1;
+  }
+  return out;
+}
+
+/** Per-region outcome of the surgery. */
+export const RegionStatus = {
+  /** No cell of the region is active (value 1): geometry is only kept fine during downsampling. */
+  Inactive: 0,
+  /** The region's border is not a single contour (it has holes), or no polyline enters it. */
+  Invalid: 1,
+  /** No rule applies with the keypoints inside (e.g. a junction region without a junction keypoint). */
+  NotApplied: 2,
+  Applied: 3,
+} as const;
+
+export interface SurgeryResult {
+  /** Flat segments [sx, sy, ex, ey, ...] after downsampling, followed by the surgery's segments. */
+  lines: number[];
+  /** Added segments per refined region label. */
+  refined: Map<number, number[]>;
+  /** 4-connected components of the nonzero USM, labelled in raster order. */
+  labels: Int32Array;
+  /** Status per label (index 0 unused). */
+  status: Uint8Array;
+  /** As refine_topology returns them: region labels, extended by the connection cells when applied. */
+  usmApplied: Int32Array;
+  usmUncertain: Int32Array;
+  /** Inputs handed to downsampleAll, for tests. */
+  debug: { usmRegions: Mask; valence: Int32Array; ptType: Int32Array; lineMapX: LineMap; lineMapY: LineMap } | null;
+}
+
+/**
+ * USM surgery (update_line_maps for each region) followed by dual contouring downsampling.
+ * `usm` holds 0 / 1 / 2 per cell (see autoUsm); a region gets surgery if any of its cells is 1.
+ * Pure: the base is not modified. With autoUsm and autoMarks this is refine_topology(...,
+ * downsample=True, manual=False, full_auto_mode=True); with user-edited marks and USM it is the
+ * interactive refinement.
+ */
+export function surgery(base: DCBase, marks: Mark[], usm: Uint8Array, downRate: number, keepDebug = false): SurgeryResult {
+  const { h, w } = base.edges;
+  const n = h * w;
+  const { pt, valence, ptMask } = base;
+  const lx = cloneLineMap(base.lx);
+  const ly = cloneLineMap(base.ly);
+  const grid = markGrid(marks, n);
+  const { labels, count } = connectedComponents(usm, h, w, 4);
+  const status = new Uint8Array(count + 1);
   const usmApplied = new Int32Array(n);
   const usmUncertain = new Int32Array(n);
   const refined = new Map<number, number[]>();
-  if (count === 0) {
-    // As in the reference, the early return reports the (closed) binary USM as "applied".
-    return { lines: lineMapsToSegments(lx, ly), refined, usmApplied: Int32Array.from(usm), usmUncertain, keypoints, debug: null };
-  }
+  const usmRegions = new Uint8Array(n);
+  for (let p = 0; p < n; p++) usmRegions[p] = usm[p] ? 1 : 0;
 
-  // Cells of each region, in raster order.
   const cells: number[][] = Array.from({ length: count + 1 }, () => []);
-  for (let p = 0; p < n; p++) if (regions[p]) cells[regions[p]].push(p);
+  const active = new Uint8Array(count + 1);
+  for (let p = 0; p < n; p++) {
+    if (!labels[p]) continue;
+    cells[labels[p]].push(p);
+    if (usm[p] === 1) active[labels[p]] = 1;
+  }
   const hasVertex = new Uint8Array(n);
   for (let p = 0; p < n; p++) hasVertex[p] = valence[p] !== 0 ? 1 : 0;
 
   const refinedLines: number[] = [];
   for (let idx = 1; idx <= count; idx++) {
+    if (!active[idx]) continue;
     const rc = cells[idx];
-    const raw = new Set<number>();
-    for (const p of rc) if (regionsRaw[p]) raw.add(regionsRaw[p]);
-    if (rc.length > longSide / 50 || raw.size > 1) continue;
-    const cps = findConnectionPoints(hasVertex, pt, rc, usm, h, w);
+    status[idx] = RegionStatus.Invalid;
+    const cps = findConnectionPoints(hasVertex, pt, rc, usmRegions, h, w);
     if (cps === null) continue;
-    const r = updateLineMaps(lx, ly, pt, ptMask, ptType, cps, rc);
+    const r = updateLineMaps(lx, ly, pt, ptMask, grid, cps, rc);
     if (r === null) continue;
+    status[idx] = r.applied ? RegionStatus.Applied : RegionStatus.NotApplied;
     const target = r.applied ? usmApplied : usmUncertain;
     for (const p of r.usmCells) target[p] = idx;
     if (r.applied) {
@@ -380,12 +507,15 @@ export function refineTopology(
     }
   }
 
-  const usmRegions = new Uint8Array(n);
-  for (let p = 0; p < n; p++) usmRegions[p] = regions[p] !== 0 ? 1 : 0;
-  const debug = keepDebug
-    ? { usmRegions, valence, ptType: ptType.slice(), lineMapX: { ...lx, mask: lx.mask.slice(), seg: lx.seg.slice() }, lineMapY: { ...ly, mask: ly.mask.slice(), seg: ly.seg.slice() } }
-    : null;
-  const lines = downsampleAll(edges, pt, usmRegions, valence, ptType, lx, ly, downRate);
+  const debug = keepDebug ? { usmRegions, valence, ptType: grid.type.slice(), lineMapX: cloneLineMap(lx), lineMapY: cloneLineMap(ly) } : null;
+  const lines = count === 0 ? lineMapsToSegments(lx, ly) : downsampleAll(base.edges, pt, usmRegions, valence, grid.type, lx, ly, downRate);
   lines.push(...refinedLines);
-  return { lines, refined, usmApplied, usmUncertain, keypoints, debug };
+  return { lines, refined, labels, status, usmApplied, usmUncertain, debug };
+}
+
+/** Keypoint lists (flat x, y) from marks, in mark order. */
+export function marksToKeypoints(marks: Mark[]): Keypoints {
+  const k: Keypoints = { end: [], sharp: [], junc: [] };
+  for (const m of marks) (m.type === 1 ? k.end : m.type === 2 ? k.sharp : k.junc).push(m.x, m.y);
+  return k;
 }

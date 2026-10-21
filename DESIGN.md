@@ -2,12 +2,12 @@
 
 This is a browser port of `../Deep-Sketch-Vectorization`, the reference implementation of *Deep Sketch
 Vectorization via Implicit Surface Extraction* (Yan et al., SIGGRAPH 2024; paper source in
-`../paper/main-latexpand.tex`; AGENTS.md says `../main-latexpand.tex`, but the file is in `../paper/`).
+`../paper/main-latexpand.tex`).
 
 **Status (2026-10-22):** the automatic pipeline, equivalent to `predict_s1.py`, runs in the browser
 on WebGPU or WebAssembly. Every post-processing stage matches the Python reference on golden
-fixtures (reference with two bug fixes applied, §7). Interactive refinement (editing keypoints and
-the USM) is the next milestone. Commit `14b4fec` is the bug-for-bug parity version.
+fixtures (reference with two bug fixes applied, §7). A first version of interactive refinement
+(editing keypoints and the USM, §8) works. Commit `14b4fec` is the bug-for-bug parity version. Commit `14b4fec` is the bug-for-bug parity version.
 
 ## 1. Quick start
 
@@ -63,18 +63,26 @@ to the offset plus (0.25 + 0.5j, 0.25 + 0.5i).
 | `src/pipeline/imgproc.ts` | cv2 / skimage / scipy | connected components (raster-order labels like cv2), dilate/erode, correlate/convolve2d, Suzuki border following (cv2.findContours, APPROX_NONE) + hole count, skimage 0.26 Zhang–Suen skeletonize (its exact LUT), peak_local_max, INTER_AREA |
 | `src/pipeline/keypoints.ts` | `predict_UDF`, `keypt_tools.py` | USM threshold, `udf_filter`, keypoint peaks |
 | `src/pipeline/dualContouring.ts` | `ndc_tools.py` | edge flags, vertex map, `cut_branch`, `remove_stray`, `remove_parallel`, `fill_edge_hole`, line maps |
-| `src/pipeline/topology.ts` | `refine_topology` & co. | keypoint alignment, USM regions, connection points, per-valence surgery, X-junction pairing |
+| `src/pipeline/topology.ts` | `refine_topology` & co. | keypoint alignment (`autoMarks`), USM regions (`autoUsm`), pure `surgery` (connection points, per-valence rules, X-junction pairing) |
 | `src/pipeline/downsample.ts` | `downsample_all` | dual-contouring downsampling preserving under-sampled blocks |
 | `src/pipeline/grouping.ts` | `svg_tools.simplify_graph` (`'hybird'`) | stroke chaining |
 | `src/pipeline/smoothing.ts` | `rdp` package, `fitCurves.py` | RDP (iterative), Schneider Bézier fitting |
-| `src/pipeline/vectorize.ts` | `predict_s1.__main__` | orchestration, SVG output |
+| `src/pipeline/vectorize.ts` | `predict_s1.__main__` | `prepare` (per image) and `finish` (per edit / option change), SVG output |
 | `src/inference/tiling.ts` | — | overlapping-tile execution for both networks, tile sizing |
 | `src/inference/session.ts` | — | ORT sessions, backend detection, model download + Cache Storage |
-| `src/worker.ts` | — | Web Worker: runs everything; caches network outputs per (image, model, size) |
+| `src/worker.ts` | `server.py` | Web Worker: runs everything; caches network outputs and `Prepared` per (image, model, size) |
+| `src/protocol.ts` | — | main thread ↔ worker messages, edit state, per-cell status codes |
+| `src/editor.ts` | `web/js/canvas.js` | interactive refinement: zoom / pan, keypoint and USM tools, undo / redo |
 | `src/main.ts`, `index.html`, `src/style.css` | — | UI |
 | `tools/export_onnx.py` | — | checkpoint → ONNX export + check against PyTorch |
 | `tools/make_fixtures.py` | — | runs the reference pipeline and dumps every intermediate |
 | `scripts/copy-ort.mjs` | — | copies ORT's WASM runtime into `public/ort/` |
+
+`prepare` runs everything that depends only on the network outputs: keypoints, edge cleanup,
+line maps, and the automatic marks and USM. `finish(prepared, marks, usm, options)` runs surgery,
+downsampling, grouping and smoothing (~0.2 s). The automatic result is
+`finish(prep, prep.autoMarks, prep.autoUsm)`, and an edited result is the same call with the user's
+marks and USM.
 
 The automatic path corresponds to `refine_topology(..., downsample=True, manual=False,
 full_auto_mode=True)` with `down_rate=8`, `map_to_lines(refine=True)`, `skip_len=4`, and input
@@ -143,7 +151,10 @@ the cached network outputs.
 
 The reference's npz files and NumPy object arrays become typed arrays: masks are `Uint8Array`,
 the vertex map is `Float32Array` (h·w·2), and line maps are `{mask: Uint8Array, seg: Float64Array(h·w·4)}`.
-Keypoints are flat `[x0, y0, …]` arrays per type. Segments are flat `[sx, sy, ex, ey, …]`. Strokes are flat polylines.
+Detected keypoints are flat `[x0, y0, …]` arrays per type. The surgery uses **marks**
+`{type, cell, x, y}`: a keypoint bound to the grid cell whose region it counts for, with the position
+lines are connected to. The **USM** is a `Uint8Array` on the grid: 0 none, 1 refine, 2 keep detail
+only. Segments are flat `[sx, sy, ex, ey, …]`. Strokes are flat polylines.
 
 Float behavior follows NumPy where it changes outcomes. The vertex map stays float32. Region
 averages and midpoints use sequential float32 sums with a float32 divide, as `np.mean` does on
@@ -170,6 +181,13 @@ Current fixtures: three light-model and one full-model run on `../SketchVG/png_h
 - **structural:** stroke grouping (§7, deviation 1). Every stroke segment must be an input segment;
   covered segments within 5% of the reference, and stroke count within 25%.
 
+`tests/editing.test.ts` (6 tests) checks the editing semantics on a fixture's network outputs:
+- the automatic pass equals `surgery(autoMarks, autoUsm)`;
+- erasing a refined region removes its surgery, and restoring the USM gives the automatic result back;
+- adding a keypoint to an unrefined region makes it refinable;
+- painting a new region over a line rebuilds it;
+- `snapMark` snaps or keeps the position.
+
 `tests/e2e.test.ts` (`npm run test:e2e`) runs the ONNX models in onnxruntime-web (WASM, Node) with
 tiling, then the TypeScript pipeline. It passes on all fixtures: UDF and aux within 1e-3 of PyTorch,
 no edge-flag flips, and segments identical to the reference's grouping input.
@@ -190,7 +208,11 @@ strokes" is present in the reference too.
 3. **No crashes.** Where the reference would raise, the port continues:
    - a zero-length tangent (ZeroDivisionError) gets a zero tangent;
    - a valence-4 region whose two pairings both intersect (AssertionError) is left unrefined.
-4. **Bézier smoothing works.** The reference's `fitBezier` raises `AttributeError` (it calls
+4. **Grouping keypoints come from the marks.** These are the keypoints the surgery used, one per
+   vertex. The reference passes its aligned keypoint lists instead, which can contain duplicates,
+   keep sharp turns whose vertex was re-marked as a junction, and miss junctions aligned at
+   valence 2. This keeps the automatic and the edited paths identical.
+5. **Bézier smoothing works.** The reference's `fitBezier` raises `AttributeError` (it calls
    `.length()` on a list), and `simplify_SVG` swallows it, so `--bezier` is a silent no-op there.
    The port runs the underlying Schneider fit (`fitCurve(points, 0.1)`).
 
@@ -217,11 +239,59 @@ out commit `14b4fec`.
 3. Grouping quality: straight edges often split into several strokes, and parallel duplicate segments
    survive along some lines (also in the reference output).
 
-## 8. Next steps
+## 8. Interactive refinement
 
-- Interactive refinement: edit keypoints and USM regions, then re-run `refine_topology` in manual
-  mode on the changed regions only, with undo. That needs the manual-mode branches of
-  `update_line_maps` / `query_keypt_by_region_no_alginment` and `update_usm`.
+The reference's web UI lets the user edit keypoints and the USM, then re-runs `refine_topology` in
+manual mode on the modified regions only (`usm_surgery('modify')`). It keeps a server-side history
+in npz files. That incremental bookkeeping has gaps: a region deleted entirely is never un-refined,
+and a modified region's original lines are not restored (the restoring code is commented out).
+
+**Design: the edit state determines the result.** The state is (marks, USM). Every edit re-runs
+`finish` on the whole state from the cached, unmodified `DCBase`. The automatic pass is the same
+function on the automatic state, so with no edits the result is identical, and undo is a plain
+snapshot stack on the main thread (60 steps, about 1 MB per USM snapshot at 512 px).
+
+Semantics:
+- **Regions** are the 4-connected components of the nonzero USM. A region gets surgery if any of its
+  cells is 1. Value 2 marks regions the automatic pass kept out of surgery (larger than long side /
+  50 cells, or closing merged several predicted regions). Their geometry is still kept at full
+  resolution by the downsampling. Painting any part of such a region activates the whole region.
+- **Keypoints inside a region** are the marks whose cell is in it. Marks from the automatic pass sit
+  on the dual-contouring vertex they were aligned to. A keypoint the user adds or moves is snapped
+  to the nearest vertex within 1.5 px (`snapMark`); with none near, it keeps its position and counts
+  for the cell under it. The worker returns snapped positions and the UI adopts them.
+- The surgery rules are the reference's `update_line_maps` with `full_auto_mode` branches. For
+  example, a region two polylines enter is rebuilt by joining them, and with one junction keypoint
+  every entering polyline is connected to it.
+- **Status per region**, shown as USM color: refined (orange), no rule applies with the keypoints
+  inside, e.g. several junctions (red), not refinable because the region has holes or nothing enters
+  it (gray), detail only (purple). Unprocessed edits show as pending (blue).
+- Edits survive post-processing option changes. They are cleared when the network outputs change
+  (new image, model, or working size), with a status message.
+
+UI (`src/editor.ts`): a floating toolbar with these tools:
+- **Pan** (V; or hold Space; scroll zooms about the cursor).
+- **Keypoints** (K): click to add with the current type (1/2/3), drag to move, double-click to cycle
+  the type, Alt-click or Delete to remove.
+- **USM brush** (B) and **Eraser** (E), with a size control.
+
+Also: undo / redo (⌘Z, ⇧⌘Z / Ctrl+Y), reset to the automatic result (undoable), and zoom buttons
+(− / Fit / +, keys −, 0, +). Edits are coalesced: while a run is in flight, further edits trigger
+one more run when it returns.
+
+Verified in headless Chrome: painting a region over the sample's chimney/roof T-junction
+activated the adjacent detail region and rebuilt the junction as straight lines meeting at the
+junction keypoint. Undo, redo, reset, eraser, and keeping edits across an option change all work.
+
+## 9. Next steps
+
+- Editing polish:
+  - a lasso fill for the USM (the reference UI has one);
+  - show which keypoints are inside which region, and why a region is not refined;
+  - optionally restrict "activate on touch" so painting next to a large detail region does not
+    activate all of it;
+  - pinch zoom on touch screens.
+- Downloading the edit state (marks + USM) to resume later.
 - fp16 models for the full variant (half the download). This needs an accuracy check against fp32,
   since a flipped edge flag changes topology.
 - Hosting: the models could be served from Hugging Face (`VITE_MODEL_BASE`) instead of the site.

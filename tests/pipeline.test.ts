@@ -16,7 +16,7 @@ import {
   type LineMap,
 } from "../src/pipeline/dualContouring";
 import { extractKeypoints, udfFilter, underSamplingMap, type Keypoints } from "../src/pipeline/keypoints";
-import { refineTopology } from "../src/pipeline/topology";
+import { autoMarks, autoUsm, dcBase, surgery } from "../src/pipeline/topology";
 import { downsampleAll } from "../src/pipeline/downsample";
 import { groupStrokes } from "../src/pipeline/grouping";
 import { fitBezier, rdp } from "../src/pipeline/smoothing";
@@ -117,11 +117,13 @@ describe.skipIf(fixtures.length === 0)("golden fixtures", () => {
     test("topology refinement (USM surgery)", () => {
       const lx = lineMap("linemap_x");
       const ly = lineMap("linemap_y");
-      const res = refineTopology(edges("edge_final"), ptMap(), npy("usm_pre").data as Uint8Array<ArrayBuffer>, lx, ly, kp(json("keypts_2x"), 0.5), meta.down_rate, true);
+      const base = dcBase(edges("edge_final"), ptMap(), lx, ly);
+      const { marks, aligned } = autoMarks(base, kp(json("keypts_2x"), 0.5));
+      const res = surgery(base, marks, autoUsm(base, npy("usm_pre").data as Uint8Array<ArrayBuffer>), meta.down_rate, true);
       const ka = kp(json("keypts_aligned"));
-      expect(res.keypoints.end).toEqual(ka.end.map(Math.fround));
-      expect(res.keypoints.sharp).toEqual(ka.sharp.map(Math.fround));
-      expect(res.keypoints.junc).toEqual(ka.junc.map(Math.fround));
+      expect(aligned.end).toEqual(ka.end.map(Math.fround));
+      expect(aligned.sharp).toEqual(ka.sharp.map(Math.fround));
+      expect(aligned.junc).toEqual(ka.junc.map(Math.fround));
       const dbg = res.debug!;
       expect(mismatches(dbg.usmRegions, npy("down_usm_in").data)).toBe(0);
       expect(mismatches(dbg.valence, npy("valence_map").data)).toBe(0);

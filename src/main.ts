@@ -1,8 +1,9 @@
 // Main-thread UI: image input, options, worker orchestration, and result display.
 
-import type { RunResult, WorkerRequest, WorkerResponse } from "./worker";
+import type { RunResult, WorkerRequest, WorkerResponse } from "./protocol";
 import { rgbaToGray } from "./pipeline/image";
 import type { VectorizeOptions } from "./pipeline/vectorize";
+import { Editor, type MarkType, type Tool } from "./editor";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -22,6 +23,10 @@ let source: Source | null = null;
 let result: RunResult | null = null;
 let runId = 0;
 let pending: number | null = null;
+/** A run was requested while another was in flight: run again when it returns. */
+let dirty = false;
+/** Editor version each request was made at. */
+const requestVersion = new Map<number, number>();
 
 const ui = {
   file: $<HTMLInputElement>("file"),
@@ -32,6 +37,7 @@ const ui = {
   epsField: $("epsField"),
   skipLen: $<HTMLInputElement>("skipLen"),
   opacity: $<HTMLInputElement>("opacity"),
+  showVector: $<HTMLInputElement>("showVector"),
   colorStrokes: $<HTMLInputElement>("colorStrokes"),
   showKeypoints: $<HTMLInputElement>("showKeypoints"),
   showUsm: $<HTMLInputElement>("showUsm"),
@@ -48,7 +54,22 @@ const ui = {
   usm: $<HTMLCanvasElement>("usm"),
   vector: $("vector"),
   keypoints: $("keypoints") as unknown as SVGSVGElement,
+  toolbar: $("toolbar"),
+  markTypes: $("markTypes"),
+  brushField: $("brushField"),
+  brushSize: $<HTMLInputElement>("brushSize"),
+  undo: $<HTMLButtonElement>("undo"),
+  redo: $<HTMLButtonElement>("redo"),
+  resetEdits: $<HTMLButtonElement>("resetEdits"),
+  editHint: $("editHint"),
 };
+
+const editor = new Editor({ stage: ui.stage, canvas: ui.canvas, usm: ui.usm, keypoints: ui.keypoints });
+editor.onChange = () => {
+  updateToolbar();
+  run();
+};
+editor.onStatus = (t) => setStatus(t);
 
 const model = () => (document.querySelector<HTMLInputElement>('input[name="model"]:checked')!.value as "light" | "full");
 const options = (): VectorizeOptions => ({
@@ -84,12 +105,12 @@ async function loadImage(blob: Blob, name: string) {
     ui.input.src = url;
     ui.empty.hidden = true;
     ui.canvas.hidden = false;
-    fitCanvas();
+    ui.toolbar.hidden = false;
     ui.vector.innerHTML = "";
-    ui.keypoints.innerHTML = "";
-    ui.usm.getContext("2d")?.clearRect(0, 0, ui.usm.width, ui.usm.height);
+    editor.setSource(bitmap.width, bitmap.height);
     ui.download.disabled = true;
-    run();
+    updateToolbar();
+    runFresh();
   } catch (e) {
     URL.revokeObjectURL(url);
     setStatus(`Could not read image: ${e instanceof Error ? e.message : e}`);
@@ -98,9 +119,14 @@ async function loadImage(blob: Blob, name: string) {
 
 function run() {
   if (!source) return;
+  if (pending !== null) {
+    dirty = true;
+    return;
+  }
   const id = ++runId;
   pending = id;
-  setStatus("Starting…", 0);
+  requestVersion.set(id, editor.version);
+  setStatus("Working…", 0);
   send({
     type: "run",
     id,
@@ -111,7 +137,15 @@ function run() {
     model: model(),
     maxSide: Number(ui.maxSide.value),
     options: options(),
+    edit: editor.editRequest(),
   });
+}
+
+/** A new image: drop any queued run for the previous one. */
+function runFresh() {
+  pending = null;
+  dirty = false;
+  run();
 }
 
 // Debounce re-runs triggered by sliders.
@@ -128,19 +162,32 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
     setStatus(source ? "Ready" : "Open a sketch to begin.");
     return;
   }
-  if (msg.id !== pending) return; // superseded
-  if (msg.type === "progress") setStatus(msg.message, msg.frac);
-  else if (msg.type === "error") {
-    pending = null;
-    setStatus(`Error: ${msg.message}`);
-  } else {
-    pending = null;
+  if (msg.id !== pending) return; // superseded (a new image was loaded)
+  if (msg.type === "progress") {
+    if (!dirty) setStatus(msg.message, msg.frac);
+    return;
+  }
+  pending = null;
+  if (msg.type === "error") setStatus(`Error: ${msg.message}`);
+  else {
     result = msg;
     ui.device.textContent = `Backend: ${msg.device}`;
-    setStatus(`${msg.strokes.length} strokes`);
+    editor.applyResult(msg, requestVersion.get(msg.id) ?? -1);
+    const { applied, notApplied, invalid } = msg.regions;
+    const regions = applied + notApplied + invalid;
+    setStatus(
+      `${msg.strokes.length} strokes${msg.edited ? " (edited)" : ""}` +
+        (regions ? ` · ${applied} of ${regions} USM region${regions > 1 ? "s" : ""} refined` : ""),
+    );
     renderResult();
     renderStats();
+    updateToolbar();
     ui.download.disabled = false;
+  }
+  requestVersion.delete(msg.id);
+  if (dirty) {
+    dirty = false;
+    run();
   }
 };
 worker.onerror = (e) => setStatus(`Worker error: ${e.message}`);
@@ -160,7 +207,6 @@ const STROKE_COLORS = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#
 
 function renderResult() {
   if (!result || !source) return;
-  const { width: w, height: h } = source;
   // Display copy of the SVG: optional per-stroke colors and a constant on-screen line width.
   const doc = new DOMParser().parseFromString(result.svg, "image/svg+xml").documentElement as unknown as SVGSVGElement;
   doc.removeAttribute("width");
@@ -174,56 +220,87 @@ function renderResult() {
     if (ui.colorStrokes.checked) p.setAttribute("stroke", STROKE_COLORS[i % STROKE_COLORS.length]);
   });
   ui.vector.replaceChildren(doc);
-
-  // Keypoints.
-  ui.keypoints.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  ui.keypoints.setAttribute("preserveAspectRatio", "none");
-  const r = Math.max(w, h) / 160;
-  const dots: string[] = [];
-  const add = (pts: number[], color: string) => {
-    for (let k = 0; k < pts.length; k += 2) dots.push(`<circle cx="${pts[k]}" cy="${pts[k + 1]}" r="${r}" fill="${color}" fill-opacity="0.85"/>`);
-  };
-  add(result.keypoints.end, "var(--end)");
-  add(result.keypoints.sharp, "var(--sharp)");
-  add(result.keypoints.junc, "var(--junc)");
-  ui.keypoints.innerHTML = dots.join("");
-
-  // Under-sampling map, drawn on the 2x grid and stretched over the prepared (cropped) area.
-  const { gridW, gridH, usm, scale } = result;
-  ui.usm.width = gridW;
-  ui.usm.height = gridH;
-  const ctx = ui.usm.getContext("2d")!;
-  const img = ctx.createImageData(gridW, gridH);
-  for (let p = 0; p < usm.length; p++) {
-    if (!usm[p]) continue;
-    const [cr, cg, cb] = usm[p] === 2 ? [234, 88, 12] : [147, 51, 234];
-    img.data.set([cr, cg, cb, usm[p] === 2 ? 130 : 100], 4 * p);
-  }
-  ctx.putImageData(img, 0, 0);
-  ui.usm.style.width = `${((result.prepared.W * scale) / w) * 100}%`;
-  ui.usm.style.height = `${((result.prepared.H * scale) / h) * 100}%`;
   applyView();
 }
-
-/** Scale the image (and its overlays) to fit the stage. */
-function fitCanvas() {
-  if (!source) return;
-  const pad = 48;
-  const aw = Math.max(64, ui.stage.clientWidth - pad);
-  const ah = Math.max(64, (window.innerWidth > 760 ? ui.stage.clientHeight : window.innerHeight * 0.7) - pad);
-  const s = Math.min(aw / source.width, ah / source.height, 4);
-  ui.canvas.style.width = `${Math.round(source.width * s)}px`;
-  ui.canvas.style.height = `${Math.round(source.height * s)}px`;
-}
-window.addEventListener("resize", fitCanvas);
 
 function applyView() {
   ui.input.style.opacity = String(Number(ui.opacity.value) / 100);
   $("opacityOut").textContent = `${ui.opacity.value}%`;
-  ui.keypoints.style.display = ui.showKeypoints.checked ? "" : "none";
-  ui.usm.style.display = ui.showUsm.checked ? "" : "none";
-  ui.legend.hidden = !(ui.showKeypoints.checked || ui.showUsm.checked);
+  ui.vector.style.display = ui.showVector.checked ? "" : "none";
+  editor.showKeypoints = ui.showKeypoints.checked;
+  editor.showUsm = ui.showUsm.checked;
+  editor.render();
+  ui.legend.hidden = !(ui.showKeypoints.checked || ui.showUsm.checked || editor.tool !== "pan");
 }
+
+// ---------- editing toolbar ----------
+
+const HINTS: Record<Tool, string> = {
+  pan: "Drag to pan, scroll to zoom. Pick a tool to refine the result.",
+  keypoint: "Click to add a keypoint · drag to move · double-click to change its type · Alt-click or Delete to remove",
+  brush: "Paint under-sampled regions (USM). Each region is rebuilt by connecting the lines entering it to the keypoint inside.",
+  eraser: "Erase under-sampled regions: their original dual-contouring lines come back.",
+};
+
+function setTool(t: Tool) {
+  editor.tool = t;
+  ui.stage.dataset.tool = t;
+  updateToolbar();
+  applyView();
+}
+
+function updateToolbar() {
+  for (const b of ui.toolbar.querySelectorAll<HTMLButtonElement>("[data-tool]")) b.setAttribute("aria-pressed", String(b.dataset.tool === editor.tool));
+  for (const b of ui.markTypes.querySelectorAll<HTMLButtonElement>("[data-type]"))
+    b.setAttribute("aria-pressed", String(Number(b.dataset.type) === editor.markType));
+  ui.markTypes.hidden = editor.tool !== "keypoint";
+  ui.brushField.hidden = editor.tool !== "brush" && editor.tool !== "eraser";
+  ui.undo.disabled = !editor.canUndo;
+  ui.redo.disabled = !editor.canRedo;
+  ui.resetEdits.disabled = !editor.isEdited;
+  ui.editHint.hidden = !source;
+  ui.editHint.textContent = HINTS[editor.tool];
+}
+
+for (const b of ui.toolbar.querySelectorAll<HTMLButtonElement>("[data-tool]")) b.addEventListener("click", () => setTool(b.dataset.tool as Tool));
+for (const b of ui.markTypes.querySelectorAll<HTMLButtonElement>("[data-type]"))
+  b.addEventListener("click", () => {
+    editor.setMarkType(Number(b.dataset.type) as MarkType);
+    updateToolbar();
+  });
+ui.brushSize.addEventListener("input", () => (editor.brushRadius = Number(ui.brushSize.value)));
+ui.undo.addEventListener("click", () => editor.undo());
+ui.redo.addEventListener("click", () => editor.redo());
+ui.resetEdits.addEventListener("click", () => editor.resetToAuto());
+$("zoomIn").addEventListener("click", () => editor.zoomBy(1.5));
+$("zoomOut").addEventListener("click", () => editor.zoomBy(1 / 1.5));
+$("zoomFit").addEventListener("click", () => editor.fit());
+
+window.addEventListener("keydown", (e) => {
+  if ((e.target as HTMLElement).closest("input, select, textarea") || !source) return;
+  const mod = e.metaKey || e.ctrlKey;
+  const k = e.key.toLowerCase();
+  if (mod && k === "z") {
+    e.preventDefault();
+    if (e.shiftKey) editor.redo();
+    else editor.undo();
+  } else if (mod && k === "y") {
+    e.preventDefault();
+    editor.redo();
+  } else if (mod) return;
+  else if (k === "v") setTool("pan");
+  else if (k === "k") setTool("keypoint");
+  else if (k === "b") setTool("brush");
+  else if (k === "e") setTool("eraser");
+  else if (k === "1" || k === "2" || k === "3") {
+    editor.setMarkType(Number(k) as MarkType);
+    updateToolbar();
+  } else if (k === "delete" || k === "backspace") editor.deleteSelected();
+  else if (k === "0") editor.fit();
+  else if (k === "+" || k === "=") editor.zoomBy(1.5);
+  else if (k === "-") editor.zoomBy(1 / 1.5);
+});
+setTool("pan");
 
 function renderStats() {
   if (!result) return;
@@ -258,7 +335,7 @@ ui.skipLen.addEventListener("input", () => {
   $("skipOut").textContent = ui.skipLen.value;
   rerunSoon();
 });
-for (const el of [ui.opacity, ui.showKeypoints, ui.showUsm]) el.addEventListener("input", applyView);
+for (const el of [ui.opacity, ui.showVector, ui.showKeypoints, ui.showUsm]) el.addEventListener("input", applyView);
 ui.colorStrokes.addEventListener("input", renderResult);
 
 ui.download.addEventListener("click", () => {
