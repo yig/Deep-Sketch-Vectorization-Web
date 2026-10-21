@@ -1,0 +1,26 @@
+[project]
+name = "deepsketch-web-tools"
+version = "0.1.0"
+description = "Offline tooling for the browser port: ONNX export and golden fixtures from the reference Python pipeline."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch",
+    "torchvision",
+    "onnx",
+    "onnxruntime",
+    "onnxconverter-common",
+    "numpy<2",
+    "opencv-python",
+    "pillow",
+    "scipy",
+    "scikit-image",
+    "scikit-learn",
+    "svgpathtools",
+    "rdp",
+    "aabbtree",
+    "edge_distance_aabb",
+    "colorama",
+    "tqdm",
+    "matplotlib",
+    "ndjson",
+]

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deep Sketch Vectorization</title>
+    <meta name="description" content="Vectorize raster sketches in your browser with Deep Sketch Vectorization via Implicit Surface Extraction (SIGGRAPH 2024)." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 13C5 3 9 3 14 8' fill='none' stroke='%232f5bd3' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>Deep Sketch Vectorization</h1>
+        <span class="tag">runs in your browser</span>
+      </div>
+      <a class="paper" href="https://cragl.cs.gmu.edu/sketchvector/" target="_blank" rel="noopener">SIGGRAPH 2024 paper ↗</a>
+    </header>
+
+    <main class="layout">
+      <aside class="panel" aria-label="Controls">
+        <section>
+          <h2>Input</h2>
+          <label class="file-button">
+            <input id="file" type="file" accept="image/*" />
+            Open image…
+          </label>
+          <p class="hint">Or drop / paste an image anywhere. Dark lines on a light background work best.</p>
+        </section>
+
+        <section>
+          <h2>Networks</h2>
+          <div class="field">
+            <span>Model</span>
+            <div class="segmented" role="radiogroup" id="model">
+              <label><input type="radio" name="model" value="light" checked /><span>Light · 13 MB</span></label>
+              <label><input type="radio" name="model" value="full" /><span>Full · 60 MB</span></label>
+            </div>
+          </div>
+          <label class="field">
+            <span>Working size (long side)</span>
+            <select id="maxSide">
+              <option value="256">256 px</option>
+              <option value="384">384 px</option>
+              <option value="512" selected>512 px</option>
+              <option value="768">768 px</option>
+              <option value="1024">1024 px</option>
+            </select>
+          </label>
+        </section>
+
+        <section>
+          <h2>Post-processing</h2>
+          <label class="field">
+            <span>Dual contouring downsampling</span>
+            <select id="downRate">
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+              <option value="8" selected>8×</option>
+              <option value="16">16×</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Smoothing</span>
+            <select id="smoothing">
+              <option value="none" selected>None</option>
+              <option value="rdp">Ramer–Douglas–Peucker</option>
+              <option value="bezier">Bézier fitting</option>
+            </select>
+          </label>
+          <label class="field" id="epsField" hidden>
+            <span>RDP tolerance <output id="epsOut">0.4</output></span>
+            <input id="eps" type="range" min="0.1" max="3" step="0.1" value="0.4" />
+          </label>
+          <label class="field">
+            <span>Drop strokes with ≤ <output id="skipOut">4</output> segments</span>
+            <input id="skipLen" type="range" min="0" max="20" step="1" value="4" />
+          </label>
+        </section>
+
+        <section>
+          <h2>View</h2>
+          <label class="field">
+            <span>Input opacity <output id="opacityOut">35%</output></span>
+            <input id="opacity" type="range" min="0" max="100" step="5" value="35" />
+          </label>
+          <label class="check"><input id="colorStrokes" type="checkbox" checked /> Color strokes</label>
+          <label class="check"><input id="showKeypoints" type="checkbox" /> Keypoints</label>
+          <label class="check"><input id="showUsm" type="checkbox" /> Under-sampling map</label>
+          <div class="legend" id="legend" hidden>
+            <span><i class="dot end"></i>end</span>
+            <span><i class="dot sharp"></i>sharp</span>
+            <span><i class="dot junc"></i>junction</span>
+            <span><i class="sq usm"></i>USM</span>
+            <span><i class="sq usm2"></i>refined</span>
+          </div>
+        </section>
+
+        <section class="actions">
+          <button id="download" class="primary" disabled>Download SVG</button>
+        </section>
+
+        <section class="status" aria-live="polite">
+          <div class="progress" id="progress" hidden><div class="bar"></div></div>
+          <p id="status">Starting…</p>
+          <p id="device" class="muted"></p>
+          <dl id="stats" class="stats"></dl>
+        </section>
+      </aside>
+
+      <section class="stage" id="stage">
+        <div class="empty" id="empty">
+          <div class="drop">
+            <strong>Drop a sketch here</strong>
+            <span>PNG / JPEG · processed locally, nothing is uploaded</span>
+            <button id="sample" class="link">or try a sample sketch</button>
+          </div>
+        </div>
+        <div class="canvas" id="canvas" hidden>
+          <img id="input" alt="Input sketch" />
+          <canvas id="usm" class="overlay"></canvas>
+          <div id="vector" class="overlay"></div>
+          <svg id="keypoints" class="overlay"></svg>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

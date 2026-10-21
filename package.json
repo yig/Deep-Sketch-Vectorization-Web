@@ -1,0 +1,29 @@
+{
+  "name": "deepsketch-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Browser port of Deep Sketch Vectorization via Implicit Surface Extraction (SIGGRAPH 2024).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "E2E=1 vitest run tests/e2e.test.ts",
+    "models": "cd tools && uv run python export_onnx.py",
+    "predev": "node scripts/copy-ort.mjs",
+    "prebuild": "node scripts/copy-ort.mjs",
+    "pretest:e2e": "node scripts/copy-ort.mjs"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@webgpu/types": "^0.1.74",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}
