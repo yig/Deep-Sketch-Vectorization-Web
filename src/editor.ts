@@ -57,8 +57,9 @@ export class Editor {
   private srcW = 1;
   private srcH = 1;
   private selected = -1;
-  // View: canvas top-left in stage coordinates and displayed width.
-  private view = { x: 0, y: 0, w: 0, fitted: false };
+  // View: canvas top-left in stage coordinates and displayed width. While `auto`, the view is
+  // refitted on every layout (resizes, toolbar changes) until the user zooms or pans.
+  private view = { x: 0, y: 0, w: 0, auto: true };
   private spaceHeld = false;
   /** Region label under the cursor (from the last result), 0 if none. */
   private hoverLabel = 0;
@@ -119,7 +120,7 @@ export class Editor {
     this.redoStack = [];
     this.edited = false;
     this.selected = -1;
-    this.view.fitted = false;
+    this.view.auto = true;
     this.layout();
     this.render();
   }
@@ -226,13 +227,19 @@ export class Editor {
     const { stage, canvas } = this.els;
     const sw = stage.clientWidth;
     const sh = stage.clientHeight;
-    if (!this.view.fitted) {
-      const pad = 24;
-      const s = Math.min((sw - 2 * pad) / this.srcW, (sh - 2 * pad) / this.srcH, 4);
+    if (this.view.auto) {
+      // Keep clear of the floating toolbar and hint bar.
+      const pad = 16;
+      const box = stage.getBoundingClientRect();
+      const bar = stage.querySelector<HTMLElement>(".toolbar:not([hidden])")?.getBoundingClientRect();
+      const hint = stage.querySelector<HTMLElement>(".edit-hint:not([hidden])")?.getBoundingClientRect();
+      const top = Math.max(pad, bar ? bar.bottom - box.top + 8 : pad);
+      const bottom = Math.max(pad, hint ? box.bottom - hint.top + 8 : pad);
+      const ah = Math.max(32, sh - top - bottom);
+      const s = Math.min((sw - 2 * pad) / this.srcW, ah / this.srcH, 4);
       this.view.w = Math.max(16, this.srcW * s);
       this.view.x = (sw - this.view.w) / 2;
-      this.view.y = (sh - (this.view.w * this.srcH) / this.srcW) / 2;
-      this.view.fitted = sw > 0;
+      this.view.y = top + (ah - (this.view.w * this.srcH) / this.srcW) / 2;
     }
     canvas.style.left = `${this.view.x}px`;
     canvas.style.top = `${this.view.y}px`;
@@ -242,7 +249,7 @@ export class Editor {
   }
 
   fit() {
-    this.view.fitted = false;
+    this.view.auto = true;
     this.layout();
   }
 
@@ -253,6 +260,7 @@ export class Editor {
     cy ??= sh / 2;
     const w = Math.min(Math.max(this.view.w * f, 32), this.srcW * 64);
     const k = w / this.view.w;
+    this.view.auto = false;
     this.view.x = cx - (cx - this.view.x) * k;
     this.view.y = cy - (cy - this.view.y) * k;
     this.view.w = w;
@@ -266,6 +274,7 @@ export class Editor {
     if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
       this.zoomBy(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX - r.left, e.clientY - r.top);
     } else {
+      this.view.auto = false;
       this.view.x -= e.deltaX;
       this.layout();
     }
@@ -286,8 +295,24 @@ export class Editor {
 
   private bindPointer() {
     const stage = this.els.stage;
-    let mode: "none" | "pan" | "drag" | "paint" | "lasso" = "none";
+    let mode: "none" | "pan" | "drag" | "paint" | "lasso" | "pinch" = "none";
     let path: { x: number; y: number }[] = [];
+    // Touch points, for two-finger pinch zoom / pan with any tool.
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch = { d: 0, x: 0, y: 0 };
+    const pinchState = () => {
+      const [a, b] = [...touches.values()];
+      const r = stage.getBoundingClientRect();
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2 - r.left, y: (a.y + b.y) / 2 - r.top };
+    };
+    const abandon = () => {
+      if (mode === "lasso") this.renderLasso([], false);
+      stage.classList.remove("panning");
+      mode = "none";
+      draft = null;
+      path = [];
+      this.render();
+    };
     let last = { x: 0, y: 0 };
     let moved = false;
     let draft: EditState | null = null;
@@ -297,6 +322,17 @@ export class Editor {
       if ((e.target as Element).closest(".toolbar, .edit-hint")) return;
       e.preventDefault(); // no native image drag or text selection
       stage.setPointerCapture(e.pointerId);
+      if (e.pointerType === "touch") {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size >= 2) {
+          // A second finger: drop the one-finger gesture and pinch instead.
+          abandon();
+          mode = "pinch";
+          pinch = pinchState();
+          return;
+        }
+        if (mode === "pinch") return;
+      }
       last = { x: e.clientX, y: e.clientY };
       moved = false;
       if (this.tool === "pan" || e.button === 1 || this.spaceHeld) {
@@ -337,11 +373,24 @@ export class Editor {
     });
 
     stage.addEventListener("pointermove", (e) => {
+      if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (mode === "pinch") {
+        if (touches.size < 2) return;
+        const now = pinchState();
+        this.view.auto = false;
+        this.view.x += now.x - pinch.x;
+        this.view.y += now.y - pinch.y;
+        if (pinch.d > 0) this.zoomBy(now.d / pinch.d, now.x, now.y);
+        else this.layout();
+        pinch = now;
+        return;
+      }
       if (mode === "none") {
         if (e.pointerType === "mouse") this.updateHover(e.clientX, e.clientY);
         return;
       }
       if (mode === "pan") {
+        this.view.auto = false;
         this.view.x += e.clientX - last.x;
         this.view.y += e.clientY - last.y;
         last = { x: e.clientX, y: e.clientY };
@@ -367,6 +416,13 @@ export class Editor {
     });
 
     const end = (e: PointerEvent) => {
+      const wasTouch = touches.delete(e.pointerId);
+      if (mode === "pinch") {
+        // Stay in pinch mode (ignoring the remaining finger) until all fingers are lifted.
+        if (touches.size === 0) mode = "none";
+        return;
+      }
+      if (wasTouch && touches.size > 0) return;
       if (mode === "lasso") {
         this.renderLasso([], false);
         if (path.length >= 3 && this.state) {
@@ -385,14 +441,9 @@ export class Editor {
       this.lastMouse = null;
       this.setHover(0);
     });
-    stage.addEventListener("pointercancel", () => {
-      // Abandon the gesture.
-      if (mode === "lasso") this.renderLasso([], false);
-      stage.classList.remove("panning");
-      mode = "none";
-      draft = null;
-      path = [];
-      this.render();
+    stage.addEventListener("pointercancel", (e) => {
+      touches.delete(e.pointerId);
+      if (mode !== "pinch" || touches.size === 0) abandon();
     });
 
     stage.addEventListener("dblclick", (e) => {

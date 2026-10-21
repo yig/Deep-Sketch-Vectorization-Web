@@ -294,7 +294,9 @@ Keyboard shortcuts are ignored only while typing into text fields. A focused rad
 checkbox, or slider does not block them.
 
 UI (`src/editor.ts`): a floating toolbar with these tools:
-- **Pan** (V; or hold Space; scroll zooms about the cursor).
+- **Pan** (V; or hold Space; scroll zooms about the cursor). On touch screens, two fingers pinch-zoom
+  and pan with any tool; a second finger cancels the one-finger stroke in progress. Until the user
+  zooms or pans, the view refits on every layout change, clear of the toolbar and hint bar.
 - **Keypoints** (K): click to add with the current type (1/2/3), drag to move, double-click to cycle
   the type, Alt-click or Delete to remove.
 - **USM brush** (B) and **Eraser** (E), with a size control.
@@ -304,14 +306,14 @@ Also: undo / redo (⌘Z, ⇧⌘Z / Ctrl+Y), reset to the automatic result (undoa
 (− / Fit / +, keys −, 0, +). Edits are coalesced: while a run is in flight, further edits trigger
 one more run when it returns.
 
-Verified in headless Chrome: painting a disc over the sample's chimney/roof T-junction rebuilt only
+Verified in headless Chrome (desktop and a 390 px emulated phone with touch input): pinch zoom
+follows the finger spread without painting, a two-finger drag pans, and a one-finger stroke
+paints. Painting a disc over the sample's chimney/roof T-junction rebuilt only
 the disc, as straight lines meeting at the junction keypoint, and left the adjacent detail-only
 strip along the roof with its original lines. Undo, redo, reset, eraser, and keeping edits across an option change all work.
 
 ## 9. Next steps
 
-- Editing polish:
-  - pinch zoom on touch screens.
 - fp16 models for the full variant (half the download). This needs an accuracy check against fp32,
   since a flipped edge flag changes topology.
 - Hosting: the models could be served from Hugging Face (`VITE_MODEL_BASE`) instead of the site.

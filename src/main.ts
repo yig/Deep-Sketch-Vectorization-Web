@@ -133,9 +133,9 @@ async function loadImage(blob: Blob, name: string) {
     ui.canvas.hidden = false;
     ui.toolbar.hidden = false;
     ui.vector.innerHTML = "";
-    editor.setSource(bitmap.width, bitmap.height);
     ui.download.disabled = true;
     updateToolbar();
+    editor.setSource(bitmap.width, bitmap.height);
     runFresh();
   } catch (e) {
     URL.revokeObjectURL(url);
@@ -274,6 +274,7 @@ function setTool(t: Tool) {
   ui.stage.dataset.tool = t;
   updateToolbar();
   applyView();
+  editor.layout(); // the toolbar's height may have changed
 }
 
 function updateToolbar() {
