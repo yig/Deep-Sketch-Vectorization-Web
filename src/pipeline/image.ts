@@ -1,7 +1,7 @@
 // Input preparation (predict_s1.load_img / open_img): grayscale, optional downscale so the long
 // side is at most `maxSide` (cv2 INTER_AREA), crop to multiples of 8, scale to [0, 1].
 
-import { resizeArea } from "./imgproc";
+import { cvResizeArea } from "./resize";
 
 export interface PreparedImage {
   /** [H x W] float32 in [0, 1], white background = 1. */
@@ -42,7 +42,7 @@ export function prepareImage(gray: Uint8Array, w: number, h: number, maxSide: nu
     const ratio = maxSide / long;
     rh = Math.trunc(h * ratio);
     rw = Math.trunc(w * ratio);
-    img = resizeArea(gray, h, w, rh, rw);
+    img = cvResizeArea(gray, w, h, 1, rw, rh);
   }
   const H = rh - (rh % 8);
   const W = rw - (rw % 8);

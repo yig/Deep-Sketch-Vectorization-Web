@@ -109,6 +109,9 @@ h2 {
   margin: 6px 0 0;
 }
 
+.hint.indent {
+  margin: -2px 0 8px 24px;
+}
 .field {
   display: flex;
   flex-direction: column;

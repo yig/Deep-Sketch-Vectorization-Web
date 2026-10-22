@@ -6,16 +6,17 @@ import type { VectorizeOptions } from "./pipeline/vectorize";
 import { Editor, type MarkType, type Tool } from "./editor";
 import { decodeEdits, encodeEdits } from "./editfile";
 import { prepKeyOf } from "./protocol";
+import type { PreprocessOptions } from "./pipeline/preprocess";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-const send = (msg: WorkerRequest) => worker.postMessage(msg, msg.type === "run" ? [msg.gray.buffer] : []);
+const send = (msg: WorkerRequest) => worker.postMessage(msg, msg.type === "run" ? [msg.rgba.buffer] : []);
 
 interface Source {
   name: string;
   url: string;
-  gray: Uint8Array;
+  rgba: Uint8Array;
   width: number;
   height: number;
   key: string;
@@ -65,6 +66,8 @@ const ui = {
   resetEdits: $<HTMLButtonElement>("resetEdits"),
   editHint: $("editHint"),
   saveEdits: $<HTMLButtonElement>("saveEdits"),
+  lineExtraction: $<HTMLInputElement>("lineExtraction"),
+  thinning: $<HTMLInputElement>("thinning"),
   loadEdits: $<HTMLInputElement>("loadEdits"),
 };
 
@@ -97,6 +100,35 @@ editor.onHover = (h) => {
   updateToolbar();
 };
 
+const preprocessOptions = (): PreprocessOptions => ({ lineExtraction: ui.lineExtraction.checked, thinning: ui.thinning.checked });
+
+/** The last pre-processed image received from the worker, shown instead of the source when in use. */
+let preImage: { key: string; url: string } | null = null;
+function setPreprocessedImage(p: { key: string; gray: Uint8Array } | null) {
+  if (preImage) URL.revokeObjectURL(preImage.url);
+  preImage = null;
+  if (!p || !source) return;
+  const c = document.createElement("canvas");
+  c.width = source.width;
+  c.height = source.height;
+  const ctx = c.getContext("2d")!;
+  const img = ctx.createImageData(source.width, source.height);
+  for (let i = 0; i < p.gray.length; i++) img.data.set([p.gray[i], p.gray[i], p.gray[i], 255], 4 * i);
+  ctx.putImageData(img, 0, 0);
+  const key = p.key;
+  c.toBlob((b) => {
+    if (!b) return;
+    preImage = { key, url: URL.createObjectURL(b) };
+    if (result?.preKey === key) showInput(key);
+  });
+}
+/** Show the source, or the pre-processed image the current result used. */
+function showInput(preKey: string) {
+  if (!source) return;
+  const url = preKey && preImage?.key === preKey ? preImage.url : source.url;
+  if (ui.input.src !== url) ui.input.src = url;
+}
+
 const model = () => (document.querySelector<HTMLInputElement>('input[name="model"]:checked')!.value as "light" | "full");
 const options = (): VectorizeOptions => ({
   downRate: Number(ui.downRate.value),
@@ -126,7 +158,8 @@ async function loadImage(blob: Blob, name: string) {
     const { data } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
     const gray = rgbaToGray(data, bitmap.width, bitmap.height);
     if (source) URL.revokeObjectURL(source.url);
-    source = { name, url, gray, width: bitmap.width, height: bitmap.height, key: await hashBytes(gray) };
+    setPreprocessedImage(null);
+    source = { name, url, rgba: new Uint8Array(data.buffer), width: bitmap.width, height: bitmap.height, key: await hashBytes(gray) };
     result = null;
     ui.input.src = url;
     ui.empty.hidden = true;
@@ -156,10 +189,11 @@ function run() {
   send({
     type: "run",
     id,
-    gray: source.gray.slice(),
+    rgba: source.rgba.slice(),
     width: source.width,
     height: source.height,
     imageKey: source.key,
+    preprocess: preprocessOptions(),
     model: model(),
     maxSide: Number(ui.maxSide.value),
     options: options(),
@@ -199,6 +233,8 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
     result = msg;
     ui.device.textContent = `Backend: ${msg.device}`;
     editor.applyResult(msg, requestVersion.get(msg.id) ?? -1);
+    if (msg.preprocessed) setPreprocessedImage(msg.preprocessed);
+    showInput(msg.preKey);
     const { applied, notApplied, invalid } = msg.regions;
     const regions = applied + notApplied + invalid;
     setStatus(
@@ -364,6 +400,8 @@ ui.file.addEventListener("change", () => {
 
 for (const el of document.querySelectorAll<HTMLInputElement>('input[name="model"]')) el.addEventListener("change", run);
 ui.maxSide.addEventListener("change", run);
+ui.lineExtraction.addEventListener("change", run);
+ui.thinning.addEventListener("change", run);
 ui.downRate.addEventListener("change", run);
 ui.smoothing.addEventListener("change", () => {
   ui.epsField.hidden = ui.smoothing.value !== "rdp";
@@ -395,7 +433,14 @@ ui.saveEdits.addEventListener("click", () => {
   const state = editor.current;
   const grid = editor.gridSize;
   if (!source || !state || !grid) return;
-  const text = encodeEdits(state, { key: source.key, name: source.name, width: source.width, height: source.height }, model(), Number(ui.maxSide.value), grid);
+  const text = encodeEdits(
+    state,
+    { key: source.key, name: source.name, width: source.width, height: source.height },
+    model(),
+    Number(ui.maxSide.value),
+    preprocessOptions(),
+    grid,
+  );
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
   a.download = `${baseName()}.edits.json`;
@@ -421,13 +466,20 @@ async function loadEditsFile(f: File) {
       setStatus(`These edits are for a different image (${file.image.name}). Open that image first.`);
       return;
     }
-    // Switch to the model and working size the edits were made with.
+    // Switch to the model, working size and pre-processing the edits were made with.
     const radio = document.querySelector<HTMLInputElement>(`input[name="model"][value="${file.model}"]`)!;
-    const changed = !radio.checked || Number(ui.maxSide.value) !== file.maxSide;
+    const pre = file.preprocess;
+    const changed =
+      !radio.checked ||
+      Number(ui.maxSide.value) !== file.maxSide ||
+      ui.lineExtraction.checked !== pre.lineExtraction ||
+      ui.thinning.checked !== pre.thinning;
+    ui.lineExtraction.checked = pre.lineExtraction;
+    ui.thinning.checked = pre.thinning;
     radio.checked = true;
     if (![...ui.maxSide.options].some((o) => Number(o.value) === file.maxSide)) ui.maxSide.add(new Option(`${file.maxSide} px`, String(file.maxSide)));
     ui.maxSide.value = String(file.maxSide);
-    editor.importState(prepKeyOf(source.key, file.model, file.maxSide), state);
+    editor.importState(prepKeyOf(source.key, file.model, file.maxSide, pre), state);
     if (changed) run();
     setStatus("Loaded edits.");
   } catch (e) {

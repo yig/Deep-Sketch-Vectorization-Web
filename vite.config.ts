@@ -21,7 +21,7 @@ export default defineConfig({
   build: { target: "es2022" },
   test: {
     include: ["tests/**/*.test.ts"],
-    exclude: process.env.E2E ? [] : ["tests/e2e.test.ts"],
+    exclude: process.env.E2E ? [] : ["tests/e2e.test.ts", "tests/preprocess.test.ts"],
     testTimeout: 120_000,
   },
 });

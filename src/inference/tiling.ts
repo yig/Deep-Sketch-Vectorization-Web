@@ -13,6 +13,8 @@ export interface TileSpec {
 
 export const UDF_HALO = 64;
 export const NDC_HALO = 32;
+/** Line thinning: 9x9 conv + 8 3x3 convs = 12 px receptive radius. */
+export const THIN_HALO = 16;
 
 function* tiles(h: number, w: number, { tile, halo }: TileSpec) {
   for (let y0 = 0; y0 < h; y0 += tile)
@@ -86,6 +88,23 @@ export async function runNdcTiled(run: RunFn, udf: Float32Array, h: number, w: n
     paste(offset, h, w, o, th, tw, 2, r0, r0 + t.y1 - t.y0, c0, c0 + t.x1 - t.x0, t.ty0, t.tx0);
   }
   return { edge, offset };
+}
+
+/** A same-size, single-channel network (line thinning) on an H x W image. */
+export async function runSameSizeTiled(run: RunFn, img: Float32Array, H: number, W: number, spec: TileSpec, onTile?: (k: number, n: number) => void) {
+  const out = new Float32Array(H * W);
+  const all = [...tiles(H, W, spec)];
+  for (let k = 0; k < all.length; k++) {
+    const t = all[k];
+    onTile?.(k, all.length);
+    const th = t.ty1 - t.ty0;
+    const tw = t.tx1 - t.tx0;
+    const [o] = await run(crop(img, W, t.ty0, t.tx0, th, tw), th, tw);
+    const r0 = t.y0 - t.ty0;
+    const c0 = t.x0 - t.tx0;
+    paste(out, H, W, o, th, tw, 1, r0, r0 + t.y1 - t.y0, c0, c0 + t.x1 - t.x0, t.ty0, t.tx0);
+  }
+  return out;
 }
 
 /**

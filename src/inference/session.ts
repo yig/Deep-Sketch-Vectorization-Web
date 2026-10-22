@@ -2,7 +2,7 @@
 // download with Cache Storage, and tile sizes derived from the device's buffer limits.
 
 import * as ort from "onnxruntime-web/webgpu";
-import { chooseTile, NDC_HALO, UDF_HALO, type RunFn } from "./tiling";
+import { chooseTile, NDC_HALO, THIN_HALO, UDF_HALO, type RunFn } from "./tiling";
 
 export type ModelVariant = "light" | "full";
 export type Backend = "webgpu" | "wasm";
@@ -120,13 +120,20 @@ export interface Networks {
 
 const loaded = new Map<ModelVariant, Promise<Networks>>();
 
-async function createSession(bytes: Uint8Array, backend: Backend): Promise<RunFn> {
-  const session = await ort.InferenceSession.create(bytes, {
-    executionProviders: backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
-    graphOptimizationLevel: "all",
-  });
+// The WebGPU execution provider cannot create two sessions concurrently.
+let sessionQueue: Promise<unknown> = Promise.resolve();
+
+async function createSession(bytes: Uint8Array, backend: Backend, channels = 1): Promise<RunFn> {
+  const created = sessionQueue.then(() =>
+    ort.InferenceSession.create(bytes, {
+      executionProviders: backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
+      graphOptimizationLevel: "all",
+    }),
+  );
+  sessionQueue = created.catch(() => {});
+  const session = await created;
   return async (input, h, w) => {
-    const feeds = { [session.inputNames[0]]: new ort.Tensor("float32", input, [1, 1, h, w]) };
+    const feeds = { [session.inputNames[0]]: new ort.Tensor("float32", input, [1, channels, h, w]) };
     const out = await session.run(feeds);
     const res = session.outputNames.map((n) => out[n].data as Float32Array);
     for (const n of session.outputNames) out[n].dispose();
@@ -147,7 +154,6 @@ export function loadNetworks(variant: ModelVariant, onProgress?: (message: strin
         );
       }
       onProgress?.("Initializing networks", 1);
-      // The WebGPU execution provider cannot create two sessions concurrently.
       const udf = await createSession(bytes[0], device.backend);
       const ndc = await createSession(bytes[1], device.backend);
       return {
@@ -161,6 +167,32 @@ export function loadNetworks(variant: ModelVariant, onProgress?: (message: strin
     })();
     p.catch(() => loaded.delete(variant));
     loaded.set(variant, p);
+  }
+  return p;
+}
+
+export type Preprocessor = "thin" | "anime2sketch";
+
+const PREPROCESSOR_FILES: Record<Preprocessor, string> = { thin: "thin.onnx", anime2sketch: "anime2sketch.w16.onnx" };
+const preprocessors = new Map<Preprocessor, Promise<{ run: RunFn; tile: number }>>();
+
+/** The optional pre-processing networks, downloaded on first use. */
+export function loadPreprocessor(name: Preprocessor, onProgress?: (message: string, frac: number) => void) {
+  let p = preprocessors.get(name);
+  if (!p) {
+    p = (async () => {
+      const device = await detectDevice();
+      const file = PREPROCESSOR_FILES[name];
+      const bytes = await fetchModel(file, (l, t) =>
+        onProgress?.(`Downloading ${file} (${(l / 1e6).toFixed(1)}${t ? ` / ${(t / 1e6).toFixed(1)}` : ""} MB)`, t ? l / t : 0),
+      );
+      onProgress?.(`Initializing ${name === "thin" ? "line thinning" : "Anime2Sketch"}`, 1);
+      const run = await createSession(bytes, device.backend, name === "thin" ? 1 : 3);
+      // Line thinning's widest tensor: 64 channels at full resolution.
+      return { run, tile: name === "thin" ? chooseTile(device.tensorBudget, 64 * 4, 1, THIN_HALO, 4096) : 512 };
+    })();
+    p.catch(() => preprocessors.delete(name));
+    preprocessors.set(name, p);
   }
   return p;
 }

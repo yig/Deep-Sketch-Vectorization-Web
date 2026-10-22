@@ -6,6 +6,13 @@ Usage:
 Writes {udf,ndc}_{light,full}.onnx (fp32) and *.fp16.onnx (fp16 weights, fp32 I/O),
 then checks each ONNX model against PyTorch on a random input.
 
+Also exports the optional pre-processing networks (--preprocess, default on):
+    thin.onnx            Edgar Simo-Serra's line thinning (network/thin.py)
+                         image float32 [1,1,H,W] in [0,1] -> thinned float32 [1,1,H,W] in [0,1]; any H, W
+    anime2sketch.onnx    Xiaoyu Xiang's Anime2Sketch (network/anime2sketch.py), fixed 512 x 512
+                         rgb float32 [1,3,512,512] in [-1,1] -> sketch float32 [1,1,512,512] in [-1,1]
+                         (also anime2sketch.w16.onnx: fp16-stored weights, half the size; the app uses it)
+
 Model I/O (N = 1, H and W are dynamic and must be multiples of 8):
     udf:  image  float32 [1,1,H,W] in [0,1] (white background = 1)
           -> udf  float32 [1,1,2H+1,2W+1]  centerline UDF (normalized by dist_clip)
@@ -28,6 +35,8 @@ REF = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Deep-
 sys.path.insert(0, REF)
 
 from predict_s1 import load_checkpoint_udf, load_checkpoint_ndc  # noqa: E402
+from network.thin import ThinningNet  # noqa: E402
+from network.anime2sketch import UnetGenerator  # noqa: E402
 
 
 class UDFWrapper(torch.nn.Module):
@@ -116,10 +125,36 @@ def to_fp16(path, out_path):
     onnx.save(model16, out_path)
 
 
+def fp16_weights(path, out_path):
+    """Store float weights as fp16 and cast them back to fp32 inside the graph. Halves the download;
+    onnxruntime folds the casts when the session is created, so inference stays fp32 (unlike a true
+    fp16 graph, which needs shader-f16 on WebGPU and is poorly supported on the WASM backend)."""
+    from onnx import helper, numpy_helper, TensorProto
+
+    model = onnx.load(path)
+    g = model.graph
+    casts, inits = [], []
+    for init in g.initializer:
+        if init.data_type != TensorProto.FLOAT or np.prod(init.dims) < 16:
+            inits.append(init)
+            continue
+        arr = numpy_helper.to_array(init).astype(np.float16)
+        inits.append(numpy_helper.from_array(arr, init.name + "__fp16"))
+        casts.append(helper.make_node("Cast", [init.name + "__fp16"], [init.name], to=TensorProto.FLOAT))
+    del g.initializer[:]
+    g.initializer.extend(inits)
+    nodes = list(g.node)
+    del g.node[:]
+    g.node.extend(casts + nodes)
+    onnx.checker.check_model(model)
+    onnx.save(model, out_path)
+
+
 def compare(module, path, example):
     """`module` must be an unpatched reference module (fresh from the checkpoint)."""
     with torch.no_grad():
-        ref = [t.numpy() for t in module.eval()(example)]
+        out = module.eval()(example)
+        ref = [t.numpy() for t in (out if isinstance(out, (tuple, list)) else [out])]
     sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
     got = sess.run(None, {sess.get_inputs()[0].name: example.numpy()})
     errs = [float(np.abs(r - g).max()) for r, g in zip(ref, got)]
@@ -127,14 +162,53 @@ def compare(module, path, example):
     return errs, shapes
 
 
+def load_thinner(pretrained):
+    net = ThinningNet()
+    net.load_state_dict(torch.load(os.path.join(pretrained, "line_thin.pth.tar"), map_location="cpu"))
+    return net.eval()
+
+
+def load_anime2sketch(pretrained):
+    """network.anime2sketch.create_model('default') without its hard-coded relative path."""
+    import functools
+    norm_layer = functools.partial(torch.nn.InstanceNorm2d, affine=False, track_running_stats=False)
+    net = UnetGenerator(3, 1, 8, 64, norm_layer=norm_layer, use_dropout=False)
+    ckpt = torch.load(os.path.join(pretrained, "netG.pth"), map_location="cpu")
+    net.load_state_dict({k.replace("module.", ""): v for k, v in ckpt.items()})
+    return net.eval()
+
+
+def export_preprocess(pretrained, out):
+    p = os.path.join(out, "thin.onnx")
+    export(load_thinner(pretrained), torch.rand(1, 1, 64, 80), p, ["image"], ["thinned"],
+           {"image": {2: "H", 3: "W"}, "thinned": {2: "H", 3: "W"}})
+    print(p, "max abs err vs torch:", *compare(load_thinner(pretrained), p, torch.rand(1, 1, 75, 93)))
+
+    p = os.path.join(out, "anime2sketch.onnx")
+    x = torch.rand(1, 3, 512, 512) * 2 - 1
+    export(load_anime2sketch(pretrained), x, p, ["rgb"], ["sketch"], None)
+    q = p.replace(".onnx", ".w16.onnx")
+    fp16_weights(p, q)
+    x = torch.rand(1, 3, 512, 512) * 2 - 1
+    print(p, "max abs err vs torch:", *compare(load_anime2sketch(pretrained), p, x))
+    print(q, "(fp16 weights) max abs err vs torch:", *compare(load_anime2sketch(pretrained), q, x))
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
     ap.add_argument("--pretrained", default=os.path.join(here, "..", "..", "pretrained"))
     ap.add_argument("--out", default=os.path.join(here, "..", "public", "models"))
+    ap.add_argument("--only-preprocess", action="store_true", help="export just the pre-processing networks")
+    ap.add_argument("--no-preprocess", action="store_true", help="skip the pre-processing networks")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(0)
+
+    if not args.no_preprocess:
+        export_preprocess(args.pretrained, args.out)
+    if args.only_preprocess:
+        return
 
     for variant in ["light", "full"]:
         udf_net, udf_args = load_checkpoint_udf(os.path.join(args.pretrained, f"udf_{variant}.pth"))

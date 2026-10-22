@@ -60,6 +60,8 @@ to the offset plus (0.25 + 0.5j, 0.25 + 0.5i).
 | file | reference | contents |
 |---|---|---|
 | `src/pipeline/image.ts` | `predict_s1.load_img` | RGBA→gray (PIL weights), INTER_AREA downscale, crop to multiples of 8 |
+| `src/pipeline/preprocess.ts` | `load_img(thin=, line_extractor=)` | optional line thinning and Anime2Sketch (§3.1) |
+| `src/pipeline/resize.ts` | PIL / OpenCV | exact ports of PIL bicubic resize and cv2 `INTER_AREA` (shrinking, integer-factor, and enlarging paths) |
 | `src/pipeline/imgproc.ts` | cv2 / skimage / scipy | connected components (raster-order labels like cv2), dilate/erode, correlate/convolve2d, Suzuki border following (cv2.findContours, APPROX_NONE) + hole count, skimage 0.26 Zhang–Suen skeletonize (its exact LUT), peak_local_max, INTER_AREA |
 | `src/pipeline/keypoints.ts` | `predict_UDF`, `keypt_tools.py` | USM threshold, `udf_filter`, keypoint peaks |
 | `src/pipeline/dualContouring.ts` | `ndc_tools.py` | edge flags, vertex map, `cut_branch`, `remove_stray`, `remove_parallel`, `fill_edge_hole`, line maps |
@@ -77,6 +79,7 @@ to the offset plus (0.25 + 0.5j, 0.25 + 0.5i).
 | `src/main.ts`, `index.html`, `src/style.css` | — | UI |
 | `tools/export_onnx.py` | — | checkpoint → ONNX export + check against PyTorch |
 | `tools/make_fixtures.py` | — | runs the reference pipeline and dumps every intermediate |
+| `tools/make_preprocess_fixtures.py` | — | the same for the pre-processing, plus cv2 resize references |
 | `scripts/copy-ort.mjs` | — | copies ORT's WASM runtime into `public/ort/` |
 
 `prepare` runs everything that depends only on the network outputs: keypoints, edge cleanup,
@@ -84,6 +87,31 @@ line maps, and the automatic marks and USM. `finish(prepared, marks, usm, option
 downsampling, grouping and smoothing (~0.2 s). The automatic result is
 `finish(prep, prep.autoMarks, prep.autoUsm)`, and an edited result is the same call with the user's
 marks and USM.
+
+### 3.1 Optional pre-processing
+
+As in the reference's `load_img`, two networks can clean up the input before vectorization. Both
+run at the source resolution, before the resize to the working size:
+
+- **Line thinning** (Edgar Simo-Serra, `network/thin.py`, `thin.onnx`, 1 MB) normalizes stroke
+  width. It runs on the grayscale image, tiled with a 16 px halo (its receptive radius is 12 px),
+  and the output is `trunc(sigmoid × 255)`. It turns paper texture into dark specks, in the
+  reference as here, so it suits clean line art only.
+- **Anime2Sketch** (Xiaoyu Xiang, `network/anime2sketch.py`, a pix2pix U-Net) extracts line art from
+  colored or shaded illustrations. The steps:
+  1. PIL bicubic resize of the RGB image to 512 × 512;
+  2. normalize to [−1, 1] and run the network;
+  3. `trunc((y + 1) / 2 × 255)`;
+  4. cv2 `INTER_AREA` back to the image size.
+
+  The app ships `anime2sketch.w16.onnx` (104 MB instead of 208 MB): the weights are stored as fp16,
+  with a Cast to fp32 for each, which onnxruntime folds when the session is created. Inference stays
+  fp32 on both backends; a true fp16 graph would need `shader-f16` on WebGPU.
+- **Both:** line extraction, then thinning.
+
+Both networks download on first use and are cached like the others. Transparent pixels are composited
+over white first, as for the grayscale path (§7). The cache key and the edit key include the
+pre-processing, and the UI shows the pre-processed image under the vector output.
 
 The automatic path corresponds to `refine_topology(..., downsample=True, manual=False,
 full_auto_mode=True)` with `down_rate=8`, `map_to_lines(refine=True)`, `skip_len=4`, and input
@@ -108,6 +136,8 @@ resized to a long side of ≤ 512 (the web UI's `open_img` behavior).
 | udf_light | 2.3 M | 9 MB | 4.5 MB |
 | udf_full | 14.7 M | 56 MB | 28 MB |
 | ndc_light / ndc_full (different weights, same architecture) | 1.1 M | 4.3 MB | 2.2 MB |
+| thin (line thinning) | 0.3 M | 1 MB | — |
+| anime2sketch | 54 M | 208 MB | 104 MB as fp16-stored weights (`.w16.onnx`, used) |
 
 ### 4.2 Tiling (`src/inference/tiling.ts`)
 
@@ -145,7 +175,8 @@ and 520 cells (NDC).
 | same, `?budget=1024` (384 px tiles) | 1.75 s | 0.66 s | — |
 | light, WASM 8 threads, 512 × 400 sample | ≈ 5 s | ≈ 6 s | 13 s wall in total |
 
-Post-processing is dominated by the edge cleanup (≈ 0.45 s). Changing post-processing options re-uses
+Post-processing is dominated by the edge cleanup (≈ 0.45 s). Pre-processing an 843 × 800 image takes
+about 0.08 s on WebGPU for Anime2Sketch and 0.09–0.13 s for thinning; on WASM, thinning takes 1.3 s. The first use adds the download and session creation. Changing post-processing options re-uses
 the cached network outputs.
 
 ## 5. Data model
@@ -192,6 +223,19 @@ Current fixtures: three light-model and one full-model run on `../SketchVG/png_h
 - `snapMark` snaps or keeps the position.
 
 `tests/editfile.test.ts` checks that edit files round-trip and that corrupt files are rejected.
+
+`tests/resize.test.ts` checks the PIL bicubic and cv2 `INTER_AREA` ports bit for bit against the
+libraries. That covers shrinking, enlarging, mixed aspect ratios, and PIL's resize to 512 × 512 of
+three images. Matching OpenCV's enlarging path needed its SIMD rounding, not its scalar formula.
+
+`tests/preprocess.test.ts` (part of `npm run test:e2e`) runs both networks in onnxruntime-web on three
+images: two crops of the paper's colored representative image and one benchmark sketch. It checks:
+- tiled thinning equals whole-image thinning;
+- thinning matches PyTorch within one gray level. Up to 1.3% of pixels differ by one, because the
+  near-white background sits on the truncation boundary at ~0.99999 × 255;
+- Anime2Sketch is within one gray level: on 0.06% of pixels with fp32 weights, 0.12% with fp16-stored
+  weights;
+- the final network input for each mode matches `load_img`.
 
 `tests/e2e.test.ts` (`npm run test:e2e`) runs the ONNX models in onnxruntime-web (WASM, Node) with
 tiling, then the TypeScript pipeline. It passes on all fixtures: UDF and aux within 1e-3 of PyTorch,
@@ -317,4 +361,3 @@ strip along the roof with its original lines. Undo, redo, reset, eraser, and kee
 - fp16 models for the full variant (half the download). This needs an accuracy check against fp32,
   since a flipped edge flag changes topology.
 - Hosting: the models could be served from Hugging Face (`VITE_MODEL_BASE`) instead of the site.
-- Optional pre-processing networks: the line thinner (1 MB) and Anime2Sketch (208 MB, lazy).

@@ -2,9 +2,11 @@
 
 import type { ModelVariant } from "./inference/session";
 import type { EditState, UiMark } from "./protocol";
+import type { PreprocessOptions } from "./pipeline/preprocess";
 
 const FORMAT = "deepsketch-edits";
-const VERSION = 1;
+/** 2: adds `preprocess` (version 1 files had none). */
+const VERSION = 2;
 
 export interface EditFile {
   format: typeof FORMAT;
@@ -13,6 +15,7 @@ export interface EditFile {
   image: { key: string; name: string; width: number; height: number };
   model: ModelVariant;
   maxSide: number;
+  preprocess: PreprocessOptions;
   /** The 2x dual-contouring grid the USM lives on. */
   grid: { w: number; h: number };
   marks: UiMark[];
@@ -49,9 +52,10 @@ export function encodeEdits(
   image: EditFile["image"],
   model: ModelVariant,
   maxSide: number,
+  preprocess: PreprocessOptions,
   grid: EditFile["grid"],
 ): string {
-  const file: EditFile = { format: FORMAT, version: VERSION, image, model, maxSide, grid, marks: state.marks, usm: rle(state.usm) };
+  const file: EditFile = { format: FORMAT, version: VERSION, image, model, maxSide, preprocess, grid, marks: state.marks, usm: rle(state.usm) };
   return JSON.stringify(file);
 }
 
@@ -60,6 +64,7 @@ export function decodeEdits(text: string): { file: EditFile; state: EditState } 
   if (f.format !== FORMAT) throw new Error("not a Deep Sketch Vectorization edits file");
   if (f.version > VERSION) throw new Error(`edits file version ${f.version} is newer than this app supports`);
   if (f.model !== "light" && f.model !== "full") throw new Error("unknown model in edits file");
+  f.preprocess = { lineExtraction: !!f.preprocess?.lineExtraction, thinning: !!f.preprocess?.thinning };
   const n = f.grid.w * f.grid.h;
   const marks: UiMark[] = f.marks.map((m) => {
     if (![1, 2, 3].includes(m.type) || !Number.isFinite(m.x) || !Number.isFinite(m.y)) throw new Error("corrupt keypoint data");

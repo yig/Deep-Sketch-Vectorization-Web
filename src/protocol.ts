@@ -4,11 +4,13 @@
 import type { DeviceOverrides, ModelVariant } from "./inference/session";
 import type { VectorizeOptions } from "./pipeline/vectorize";
 import type { RegionInfo } from "./pipeline/topology";
+import { NO_PREPROCESS, preprocessKey, type PreprocessOptions } from "./pipeline/preprocess";
 
 export type { RegionInfo };
 
 /** Identifies one set of network outputs; edits are only valid for the same key. */
-export const prepKeyOf = (imageKey: string, model: ModelVariant, maxSide: number) => `${imageKey}|${model}|${maxSide}`;
+export const prepKeyOf = (imageKey: string, model: ModelVariant, maxSide: number, pre: PreprocessOptions = NO_PREPROCESS) =>
+  `${imageKey}|${model}|${maxSide}` + (preprocessKey(pre) ? `|${preprocessKey(pre)}` : "");
 
 /** A keypoint as the UI sees it, in source-image pixels. `cell` is set for keypoints the worker placed. */
 export interface UiMark {
@@ -27,12 +29,13 @@ export interface EditState {
 export interface RunRequest {
   type: "run";
   id: number;
-  /** Grayscale source image (8-bit). */
-  gray: Uint8Array;
+  /** Source image, RGBA (as from canvas getImageData). */
+  rgba: Uint8Array;
   width: number;
   height: number;
-  /** Identifies the image content, for caching network outputs. */
+  /** Identifies the image content (hash of its grayscale version), for caching network outputs. */
   imageKey: string;
+  preprocess: PreprocessOptions;
   model: ModelVariant;
   maxSide: number;
   options: VectorizeOptions;
@@ -61,6 +64,11 @@ export interface RunResult {
   prepKey: string;
   /** Whether `edit` was applied (false: automatic result). */
   edited: boolean;
+  /** The pre-processed image (source size, grayscale) when pre-processing is on and it changed
+   *  since the last result; null otherwise. */
+  preprocessed: { key: string; gray: Uint8Array } | null;
+  /** Key of the pre-processed image this result used ("" without pre-processing). */
+  preKey: string;
   svg: string;
   /** Strokes in source-image pixels. */
   strokes: number[][];
