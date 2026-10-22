@@ -16,7 +16,7 @@ let modelBase = "";
 /** Set where models (VITE_MODEL_BASE, default <app>/models/) and the ORT runtime (<app>/ort/) live. */
 export function setAppBase(appBase: string) {
   modelBase = new URL(import.meta.env.VITE_MODEL_BASE ?? "models/", appBase).href;
-  // onnxruntime-web's WebAssembly runtime, copied to public/ort/ by scripts/copy-ort.mjs.
+  // onnxruntime-web's WebAssembly runtime, copied to public/ort/ by scripts/copy-runtime.mjs.
   ort.env.wasm.wasmPaths = new URL("ort/", appBase).href;
 }
 

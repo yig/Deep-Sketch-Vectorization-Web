@@ -33,8 +33,18 @@ The exported models are cached by pinned revisions plus the export script and lo
 (`*.fp16.onnx`, the fp32 `anime2sketch.onnx`) are dropped before deploying, leaving about 178 MB of
 models. The workflow then runs `npm test` (the fixture-based tests skip without fixtures) and the build.
 
-GitHub Pages cannot send the COOP/COEP headers that cross-origin isolation needs, so the WebAssembly
-fallback runs single-threaded there; WebGPU is unaffected.
+GitHub Pages cannot send the COOP/COEP headers that cross-origin isolation (and so multi-threaded
+WebAssembly) needs. [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) (MIT, copied
+to the app root by `scripts/copy-runtime.mjs`) adds them from a service worker, which costs one page
+reload on the first visit. It does nothing where the server already sends the headers (vite
+dev / preview). Two settings differ from its defaults, both in `index.html`:
+- **COEP mode:** `require-corp` everywhere. The default, `credentialless` outside Chrome and Firefox,
+  is unsupported in Safari, and everything this app loads is same-origin.
+- **Reload timing:** the page reloads only once the worker is active. The default reloads as soon as
+  installation starts, which needed a second reload.
+
+On a static server without the headers, the CPU fallback on the 512 × 400 sample went from 72 s
+(1 thread) to 12 s (8 threads); results are identical.
 
 URL parameters for debugging: `?backend=wasm` forces the CPU backend; `?budget=512` sets the
 per-tensor GPU memory budget in MB (default 256), which controls the tile size (§4.2).
@@ -96,7 +106,7 @@ to the offset plus (0.25 + 0.5j, 0.25 + 0.5i).
 | `tools/export_onnx.py` | — | checkpoint → ONNX export + check against PyTorch |
 | `tools/make_fixtures.py` | — | runs the reference pipeline and dumps every intermediate |
 | `tools/make_preprocess_fixtures.py` | — | the same for the pre-processing, plus cv2 resize references |
-| `scripts/copy-ort.mjs` | — | copies ORT's WASM runtime into `public/ort/` |
+| `scripts/copy-runtime.mjs` | — | copies ORT's WASM runtime into `public/ort/` and coi-serviceworker into `public/` |
 
 `prepare` runs everything that depends only on the network outputs: keypoints, edge cleanup,
 line maps, and the automatic marks and USM. `finish(prepared, marks, usm, options)` runs surgery,
@@ -179,7 +189,8 @@ and 520 cells (NDC).
   the worker's own `assets/` URL.
 - The WebGPU EP cannot create two sessions concurrently, so they are created one after the other.
 - Multi-threaded WASM needs cross-origin isolation. The dev and preview servers send COOP/COEP headers;
-  without them (e.g. GitHub Pages) the WASM backend falls back to 1 thread. WebGPU is unaffected.
+  on static hosts a service worker adds them (§1, Deployment). Without isolation, the WASM backend
+  falls back to 1 thread. WebGPU is unaffected.
 - Models are fetched from `VITE_MODEL_BASE` (default `<app>/models/`) and kept in Cache Storage.
 
 ### 4.4 Measured (Apple M5 Max, headless Chrome)

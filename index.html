@@ -7,6 +7,26 @@
     <meta name="description" content="Vectorize raster sketches in your browser with Deep Sketch Vectorization via Implicit Surface Extraction (SIGGRAPH 2024)." />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 13C5 3 9 3 14 8' fill='none' stroke='%232f5bd3' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/src/style.css" />
+    <!--
+      Multi-threaded WebAssembly needs cross-origin isolation (COOP/COEP headers), which static hosts
+      like GitHub Pages cannot send. coi-serviceworker adds them from a service worker, reloading the
+      page once on the first visit. It does nothing where the server already sends them (vite dev /
+      preview). Everything this app loads is same-origin, so require-corp works in every browser
+      (the script's default, "credentialless" outside Chrome and Firefox, is unsupported in Safari).
+    -->
+    <script>
+      window.coi = {
+        coepCredentialless: () => false,
+        // Reload once the worker is active, so the reloaded page is controlled by it. (The default
+        // reloads as soon as installation starts, which can need a second reload.)
+        doReload: () => {
+          if (window.__coiReloading) return;
+          window.__coiReloading = true;
+          navigator.serviceWorker.ready.then(() => window.location.reload());
+        },
+      };
+    </script>
+    <script src="./coi-serviceworker.js"></script>
   </head>
   <body>
     <header class="topbar">
