@@ -267,8 +267,9 @@ strokes" is present in the reference too.
 
 ### Reference bugs fixed (2026-10-22)
 
-The fixtures are generated from the reference with the same fixes patched in (`tools/make_fixtures.py`),
-so the golden tests still compare like with like. For bug-for-bug parity with the reference, check
+Both fixes are also committed in the reference repo (`Deep-Sketch-Vectorization` `c1a2139`). On
+older checkouts, `tools/make_fixtures.py` patches them in, so the golden tests compare like with like
+either way. Regenerating a fixture with the fixed reference reproduces the existing one exactly. For bug-for-bug parity with the reference, check
 out commit `14b4fec`.
 
 1. `downsample_all`: `usm_downsample[r_mask] = False` indexed with a **uint8** array, which NumPy

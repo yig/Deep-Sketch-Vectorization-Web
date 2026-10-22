@@ -34,12 +34,14 @@ ST.sample = lambda population, k: list(population)[:k]
 
 def _fix_downsample_all():
     """Reference bug: `usm_downsample[r_mask] = False` indexes with a uint8 array, which NumPy treats as
-    row indices (clearing coarse rows 0 and 1) instead of a boolean mask. The browser port fixes it;
-    patch the reference the same way so the fixtures stay comparable."""
+    row indices (clearing coarse rows 0 and 1) instead of a boolean mask. Fixed in the reference repo
+    (Deep-Sketch-Vectorization); this patch keeps older checkouts comparable."""
     import inspect
     import textwrap
     src = textwrap.dedent(inspect.getsource(NT.downsample_all))
     bad = "usm_downsample[r_mask] = False"
+    if "usm_downsample[r_mask.astype(bool)] = False" in src:
+        return  # already fixed in the reference
     assert src.count(bad) == 1
     src = src.replace(bad, "usm_downsample[r_mask.astype(bool)] = False")
     exec(compile(src, "<downsample_all, patched by make_fixtures.py>", "exec"), NT.__dict__)
