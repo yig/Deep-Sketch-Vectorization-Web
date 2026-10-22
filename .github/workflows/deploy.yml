@@ -32,20 +32,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Same layout as the development checkout: web/, Deep-Sketch-Vectorization/, pretrained/.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: web
 
       - name: Restore exported models
         id: models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: web/public/models
           key: models-${{ env.REFERENCE_REF }}-${{ env.WEIGHTS_REF }}-${{ hashFiles('web/tools/export_onnx.py', 'web/tools/uv.lock') }}
 
       - name: Check out the reference implementation
         if: steps.models.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.REFERENCE_REPO }}
           ref: ${{ env.REFERENCE_REF }}
@@ -62,7 +62,7 @@ jobs:
 
       - name: Set up uv
         if: steps.models.outputs.cache-hit != 'true'
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10
 
       - name: Export the ONNX models
         if: steps.models.outputs.cache-hit != 'true'
@@ -75,7 +75,7 @@ jobs:
           rm -f web/public/models/*.fp16.onnx web/public/models/anime2sketch.onnx
           ls -la web/public/models
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -88,7 +88,7 @@ jobs:
           npm test
           npm run build
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: web/dist
 
@@ -100,4 +100,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
