@@ -261,9 +261,10 @@ strokes" is present in the reference too.
    vertex. The reference passes its aligned keypoint lists instead, which can contain duplicates,
    keep sharp turns whose vertex was re-marked as a junction, and miss junctions aligned at
    valence 2. This keeps the automatic and the edited paths identical.
-5. **Bézier smoothing works.** The reference's `fitBezier` raises `AttributeError` (it calls
-   `.length()` on a list), and `simplify_SVG` swallows it, so `--bezier` is a silent no-op there.
-   The port runs the underlying Schneider fit (`fitCurve(points, 0.1)`).
+5. **Bézier smoothing works.** The reference's `fitBezier` raised `AttributeError` (it called
+   `.length()` on a list), and `simplify_SVG` swallowed it, so `--bezier` was a silent no-op there.
+   The port runs the underlying Schneider fit (`fitCurve(points, 0.1)`). Fixed in the reference repo
+   as `44bb0a3`; the fixed `fitBezier` gives identical curves on all fixtures.
 
 ### Reference bugs fixed (2026-10-22)
 

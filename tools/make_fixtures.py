@@ -198,8 +198,8 @@ def run(image_path, variant, out_root, resize_to=512, down_rate=8, skip_len=4, e
         strokes, _ = ST.simplify_graph(paths, keypts2x, mode="hybird", skip_len=skip_len)
         save_json(d, "strokes", paths_json(strokes))
         save_json(d, "strokes_rdp", paths_json(ST.ramerDouglas(strokes, eps)))
-        # ST.fitBezier raises AttributeError (calls .length() on a list); the reference swallows it in
-        # simplify_SVG, so --bezier is a no-op there. Fit with the underlying Schneider routine directly.
+        # Before Deep-Sketch-Vectorization 44bb0a3, ST.fitBezier raised AttributeError. Fit with the
+        # underlying Schneider routine directly, which is what the fixed fitBezier does (identical output).
         beziers = [[np.asarray(b).tolist() for b in ST.fitCurve(ST.flatten_paths_known_to_be_polyline_to_pts_array(s), 0.1)]
                    for s in strokes]
         save_json(d, "strokes_bezier", beziers)
