@@ -1,0 +1,103 @@
+# Build the site and deploy it to GitHub Pages on every push to main.
+#
+# The ONNX models are not in git. They are exported from the pretrained PyTorch weights with
+# tools/export_onnx.py, using the reference implementation's network definitions, and cached:
+# the export only re-runs when the pinned revisions or the export tooling change.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # Reference implementation (network definitions) and pretrained weights, pinned.
+  REFERENCE_REPO: CraGL/Deep-Sketch-Vectorization
+  REFERENCE_REF: 44bb0a3e9a6d809c610d1f59feee93ab82f3a312
+  WEIGHTS_REPO: https://huggingface.co/waterheater/deepsketch
+  WEIGHTS_REF: e2f6e47718e4965c6bffcf5507accd373dfee31e
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Same layout as the development checkout: web/, Deep-Sketch-Vectorization/, pretrained/.
+      - uses: actions/checkout@v4
+        with:
+          path: web
+
+      - name: Restore exported models
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: web/public/models
+          key: models-${{ env.REFERENCE_REF }}-${{ env.WEIGHTS_REF }}-${{ hashFiles('web/tools/export_onnx.py', 'web/tools/uv.lock') }}
+
+      - name: Check out the reference implementation
+        if: steps.models.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REFERENCE_REPO }}
+          ref: ${{ env.REFERENCE_REF }}
+          path: Deep-Sketch-Vectorization
+
+      - name: Download the pretrained weights
+        if: steps.models.outputs.cache-hit != 'true'
+        run: |
+          git lfs install
+          GIT_LFS_SKIP_SMUDGE=1 git clone "$WEIGHTS_REPO" pretrained
+          cd pretrained
+          git checkout "$WEIGHTS_REF"
+          git lfs pull --include "udf_light.pth,udf_full.pth,ndc_light.pth,ndc_full.pth,line_thin.pth.tar,netG.pth"
+
+      - name: Set up uv
+        if: steps.models.outputs.cache-hit != 'true'
+        uses: astral-sh/setup-uv@v6
+
+      - name: Export the ONNX models
+        if: steps.models.outputs.cache-hit != 'true'
+        working-directory: web/tools
+        run: uv run python export_onnx.py
+
+      # Before the post-job cache save, so the cache only holds what is deployed.
+      - name: Drop model files the app does not use
+        run: |
+          rm -f web/public/models/*.fp16.onnx web/public/models/anime2sketch.onnx
+          ls -la web/public/models
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install, test, build
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

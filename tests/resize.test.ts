@@ -20,8 +20,9 @@ const diffs = (a: ArrayLike<number>, b: ArrayLike<number>) => {
 };
 
 describe.skipIf(!have)("resize ports", () => {
-  const src = readNpy(join(ROOT, "resize", "src.npy"));
-  const sizes = readdirSync(join(ROOT, "resize")).filter((f) => /^\d+x\d+\.npy$/.test(f));
+  // Guarded: vitest runs a skipped describe's body while collecting tests.
+  const src = have ? readNpy(join(ROOT, "resize", "src.npy")) : null!;
+  const sizes = have ? readdirSync(join(ROOT, "resize")).filter((f) => /^\d+x\d+\.npy$/.test(f)) : [];
 
   test.each(sizes)("cv2 INTER_AREA 512x512 -> %s", (f) => {
     const [w, h] = f.replace(".npy", "").split("x").map(Number);
@@ -31,7 +32,7 @@ describe.skipIf(!have)("resize ports", () => {
     expect(diffs(got, ref)).toEqual({ n: 0, max: 0 });
   });
 
-  const images = readdirSync(ROOT).filter((d) => existsSync(join(ROOT, d, "rgb.npy")));
+  const images = have ? readdirSync(ROOT).filter((d) => existsSync(join(ROOT, d, "rgb.npy"))) : [];
   test.each(images)("PIL bicubic to 512x512 (%s)", (d) => {
     const rgb = readNpy(join(ROOT, d, "rgb.npy"));
     const [h, w] = rgb.shape;

@@ -20,6 +20,22 @@ npm run test:e2e   # ONNX + tiling + post-processing vs PyTorch, in Node (slow: 
 npm run build      # static site in dist/ (models are copied from public/models)
 ```
 
+**Deployment.** `.github/workflows/deploy.yml` builds and deploys to GitHub Pages on every push to
+`main` (https://yig.github.io/Deep-Sketch-Vectorization-Web/). The models are not in git, so the
+workflow regenerates them:
+1. checks out the reference implementation (CraGL/Deep-Sketch-Vectorization, pinned commit) next to
+   the app;
+2. fetches the pretrained weights from Hugging Face (pinned revision, git-lfs);
+3. runs `tools/export_onnx.py` with CPU-only PyTorch. On Linux, `tools/pyproject.toml` points `torch`
+   at the CPU wheel index; macOS is unaffected.
+
+The exported models are cached by pinned revisions plus the export script and lockfile. Unused files
+(`*.fp16.onnx`, the fp32 `anime2sketch.onnx`) are dropped before deploying, leaving about 178 MB of
+models. The workflow then runs `npm test` (the fixture-based tests skip without fixtures) and the build.
+
+GitHub Pages cannot send the COOP/COEP headers that cross-origin isolation needs, so the WebAssembly
+fallback runs single-threaded there; WebGPU is unaffected.
+
 URL parameters for debugging: `?backend=wasm` forces the CPU backend; `?budget=512` sets the
 per-tensor GPU memory budget in MB (default 256), which controls the tile size (§4.2).
 

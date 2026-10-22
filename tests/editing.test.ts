@@ -2,7 +2,7 @@
 // determines the result, erasing a region undoes its surgery, and a keypoint can make a region refinable.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import { readNpy } from "./npy";
 import { finish, prepare, vectorizeFromNetworks, type Prepared } from "../src/pipeline/vectorize";
 import { RegionStatus, snapMark, type Mark } from "../src/pipeline/topology";
@@ -32,10 +32,16 @@ function regionCells(labels: Int32Array): Map<number, number[]> {
 const name = fixtures.find((f) => f.startsWith("Art_freeform_GL_01")) ?? fixtures[0];
 
 describe.skipIf(fixtures.length === 0)("interactive refinement", () => {
-  const prep = load(name);
-  const auto = finish(prep, prep.autoMarks, prep.autoUsm);
-  const cells = regionCells(auto.regionLabels);
+  // Loaded in beforeAll: vitest runs a skipped describe's body while collecting tests.
+  let prep: Prepared;
+  let auto: ReturnType<typeof finish>;
+  let cells: Map<number, number[]>;
   const withStatus = (s: number) => [...cells.keys()].filter((l) => auto.regionStatus[l] === s);
+  beforeAll(() => {
+    prep = load(name);
+    auto = finish(prep, prep.autoMarks, prep.autoUsm);
+    cells = regionCells(auto.regionLabels);
+  });
 
   test("the automatic pass is surgery on the automatic marks and USM", () => {
     const meta = JSON.parse(readFileSync(join(ROOT, name, "meta.json"), "utf8"));
