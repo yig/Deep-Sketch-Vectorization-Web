@@ -4,11 +4,17 @@
 // straight to its /count endpoint with sendBeacon, as count.js itself does. A beacon reads no
 // response, so cross-origin isolation does not affect it.
 
-/** The GoatCounter site code (https://<code>.goatcounter.com). Empty disables counting. */
-const GOATCOUNTER_CODE: string = "cragl-deep-sketch-vectorization-web";
+/**
+ * GoatCounter site codes (https://<code>.goatcounter.com); every hit goes to each. The first site has
+ * sessions on (unique visitors), the second has them off (every hit). Empty disables counting.
+ */
+const GOATCOUNTER_CODES: string[] = [
+  "cragl-deep-sketch-vectorization-web",
+  "cragl-deep-sketch-vectorization-web-vectorizations",
+];
 
 const enabled =
-  GOATCOUNTER_CODE !== "" &&
+  GOATCOUNTER_CODES.length > 0 &&
   import.meta.env.PROD &&
   !["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 
@@ -22,10 +28,12 @@ function count(path: string, title: string, event: boolean) {
   });
   if (event) q.set("e", "true");
   else if (document.referrer) q.set("r", document.referrer);
-  try {
-    navigator.sendBeacon(`https://${GOATCOUNTER_CODE}.goatcounter.com/count?${q}`);
-  } catch {
-    // Counting is best-effort.
+  for (const code of GOATCOUNTER_CODES) {
+    try {
+      navigator.sendBeacon(`https://${code}.goatcounter.com/count?${q}`);
+    } catch {
+      // Counting is best-effort.
+    }
   }
 }
 
