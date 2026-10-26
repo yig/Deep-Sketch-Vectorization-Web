@@ -55,6 +55,15 @@ GoatCounter's `count.js` is cross-origin, which `require-corp` blocks, so hits g
 Counting is off when `GOATCOUNTER_CODE` is empty, in dev/preview builds, and on localhost. The visit is
 not counted on the first-visit load that coi-serviceworker is about to reload, so it isn't counted twice.
 
+Reading the dashboard (https://cragl-deep-sketch-vectorization-web.goatcounter.com): GoatCounter
+shows *visits*, the first hit to a path within an 8-hour session (a hash of IP address and browser).
+Sessions are on (the default, kept on purpose), so the `vectorize` count is the number of visitors
+who vectorized at least one sketch, not the number of sketches. Every hit is still sent and stored;
+only the dashboard deduplicates. The dashboard total includes events, so one person loading the
+page and vectorizing sketches shows as 2 visits: `/Deep-Sketch-Vectorization-Web` and `vectorize`.
+To count every sketch (and every page reload), turn sessions off under Settings → Data collection →
+Sessions.
+
 On a static server without the headers, the CPU fallback on the 512 × 400 sample went from 72 s
 (1 thread) to 12 s (8 threads); results are identical.
 
