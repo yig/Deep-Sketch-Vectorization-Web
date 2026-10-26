@@ -44,8 +44,11 @@ dev / preview). Two settings differ from its defaults, both in `index.html`:
   installation starts, which needed a second reload.
 
 **Usage counting.** `src/analytics.ts` sends anonymous counts to [GoatCounter](https://www.goatcounter.com)
-(no cookies; only a path, title, screen size, and for visits the referrer, never image data): one
-pageview per visit and one `vectorize` event per loaded sketch. Only the first result for each
+(no cookies, never image data): one pageview per visit and one `vectorize` event per loaded sketch.
+Each hit sends a path and title that name the page, not the image: the page's URL path and
+`<title>` for a visit, the fixed strings `vectorize` and `Sketch vectorized` for an event. The
+sketch's file name is never sent. Hits also send the screen size (CSS pixels and pixel ratio) and,
+for visits, the referrer. Only the first result for each
 loaded image counts, so slider re-runs and edits don't count again. The built-in sample counts too.
 GoatCounter's `count.js` is cross-origin, which `require-corp` blocks, so hits go straight to its
 `/count` endpoint with `navigator.sendBeacon`. A beacon reads no response, so COEP doesn't affect it.
