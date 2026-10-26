@@ -32,3 +32,4 @@ npm run dev
 and `tools/make_preprocess_fixtures.py`. See [DESIGN.md](DESIGN.md) for the design and architecture.
 
 Pushing to `main` builds the site and deploys it to GitHub Pages (`.github/workflows/deploy.yml`).
+Visits and vectorized sketches are counted anonymously with GoatCounter (`src/analytics.ts`).

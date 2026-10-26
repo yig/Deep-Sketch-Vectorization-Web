@@ -43,6 +43,15 @@ dev / preview). Two settings differ from its defaults, both in `index.html`:
 - **Reload timing:** the page reloads only once the worker is active. The default reloads as soon as
   installation starts, which needed a second reload.
 
+**Usage counting.** `src/analytics.ts` sends anonymous counts to [GoatCounter](https://www.goatcounter.com)
+(no cookies; only a path, title, screen size, and for visits the referrer, never image data): one
+pageview per visit and one `vectorize` event per loaded sketch. Only the first result for each
+loaded image counts, so slider re-runs and edits don't count again. The built-in sample counts too.
+GoatCounter's `count.js` is cross-origin, which `require-corp` blocks, so hits go straight to its
+`/count` endpoint with `navigator.sendBeacon`. A beacon reads no response, so COEP doesn't affect it.
+Counting is off when `GOATCOUNTER_CODE` is empty, in dev/preview builds, and on localhost. The visit is
+not counted on the first-visit load that coi-serviceworker is about to reload, so it isn't counted twice.
+
 On a static server without the headers, the CPU fallback on the 512 × 400 sample went from 72 s
 (1 thread) to 12 s (8 threads); results are identical.
 

@@ -7,11 +7,13 @@ import { Editor, type MarkType, type Tool } from "./editor";
 import { decodeEdits, encodeEdits } from "./editfile";
 import { prepKeyOf } from "./protocol";
 import type { PreprocessOptions } from "./pipeline/preprocess";
+import { countPageview, countVectorized } from "./analytics";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 const send = (msg: WorkerRequest) => worker.postMessage(msg, msg.type === "run" ? [msg.rgba.buffer] : []);
+countPageview();
 
 interface Source {
   name: string;
@@ -23,6 +25,8 @@ interface Source {
 }
 
 let source: Source | null = null;
+/** The current source has been counted as vectorized (re-runs and edits do not count again). */
+let counted = false;
 let result: RunResult | null = null;
 let runId = 0;
 let pending: number | null = null;
@@ -161,6 +165,7 @@ async function loadImage(blob: Blob, name: string) {
     setPreprocessedImage(null);
     source = { name, url, rgba: new Uint8Array(data.buffer), width: bitmap.width, height: bitmap.height, key: await hashBytes(gray) };
     result = null;
+    counted = false;
     ui.input.src = url;
     ui.empty.hidden = true;
     ui.canvas.hidden = false;
@@ -231,6 +236,10 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
   if (msg.type === "error") setStatus(`Error: ${msg.message}`);
   else {
     result = msg;
+    if (!counted) {
+      counted = true;
+      countVectorized();
+    }
     ui.device.textContent = `Backend: ${msg.device}`;
     editor.applyResult(msg, requestVersion.get(msg.id) ?? -1);
     if (msg.preprocessed) setPreprocessedImage(msg.preprocessed);
