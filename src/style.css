@@ -283,7 +283,14 @@ button.link {
   background: rgba(37, 99, 235, 0.45);
 }
 
-.status p {
+.status {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+.status p,
+.result p {
   margin: 4px 0;
 }
 .progress {
@@ -472,6 +479,8 @@ button.link {
   .panel {
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    /* The page scrolls instead, so the status sticks to the top of the window. */
+    overflow-y: visible;
   }
   .stage {
     min-height: 60vh;
