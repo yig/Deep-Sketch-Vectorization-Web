@@ -7,7 +7,7 @@ Vectorization via Implicit Surface Extraction* (Yan et al., SIGGRAPH 2024; paper
 **Status (2026-10-22):** the automatic pipeline, equivalent to `predict_s1.py`, runs in the browser
 on WebGPU or WebAssembly. Every post-processing stage matches the Python reference on golden
 fixtures (reference with two bug fixes applied, §7). A first version of interactive refinement
-(editing keypoints and the USM, §8) works. Commit `14b4fec` is the bug-for-bug parity version. Commit `14b4fec` is the bug-for-bug parity version.
+(editing keypoints and the USM, §8) works. Commit `14b4fec` is the bug-for-bug parity version.
 
 ## 1. Quick start
 
