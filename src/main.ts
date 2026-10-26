@@ -141,9 +141,16 @@ const options = (): VectorizeOptions => ({
   rdpEpsilon: Number(ui.eps.value),
 });
 
-function setStatus(text: string, frac: number | null = null) {
+/**
+ * Shows a status message. Progress and results (`oneLine`) are truncated to one line, so the status
+ * keeps its height while a slider re-runs the pipeline; other messages, like errors, wrap.
+ */
+function setStatus(text: string, frac: number | null = null, oneLine = frac !== null) {
   ui.status.textContent = text;
-  ui.progress.hidden = frac === null;
+  ui.status.title = text;
+  ui.status.classList.toggle("one-line", oneLine);
+  // Hide the bar without collapsing its space, so the panel below doesn't jump.
+  ui.progress.style.visibility = frac === null ? "hidden" : "visible";
   if (frac !== null) (ui.progress.firstElementChild as HTMLElement).style.width = `${Math.round(frac * 100)}%`;
 }
 
@@ -249,6 +256,8 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
     setStatus(
       `${msg.strokes.length} strokes${msg.edited ? " (edited)" : ""}` +
         (regions ? ` · ${applied} of ${regions} USM region${regions > 1 ? "s" : ""} refined` : ""),
+      null,
+      true,
     );
     renderResult();
     renderStats();

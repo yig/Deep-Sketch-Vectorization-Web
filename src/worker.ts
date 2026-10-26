@@ -64,7 +64,7 @@ async function run(req: RunRequest) {
     );
     const t1 = performance.now();
     const { edge, offset } = await runNdcTiled(nets.ndc, udf, 2 * H, 2 * W, { tile: nets.ndcTile, halo: NDC_HALO }, (k, n) =>
-      progress(`Line reconstruction network: tile ${k + 1} / ${n}`, k / n),
+      progress(`Line network: tile ${k + 1} / ${n}`, k / n),
     );
     const t2 = performance.now();
     progress("Post-processing", 1);

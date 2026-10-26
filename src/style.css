@@ -293,6 +293,11 @@ button.link {
 .result p {
   margin: 4px 0;
 }
+.status p.one-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .progress {
   height: 4px;
   background: var(--line);
