@@ -289,14 +289,29 @@ button.link {
   z-index: 1;
   background: var(--panel);
 }
-.status p,
+.status-box {
+  min-height: 2lh;
+}
+.status-box p {
+  margin: 0;
+}
+/* Exactly two lines: the progress bar and one line of text, or two lines of text. */
+.status-box.fixed {
+  height: 2lh;
+}
+.status-box.fixed p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.status-box.fixed .progress:not([hidden]) + p {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
 .result p {
   margin: 4px 0;
-}
-.status p.one-line {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .progress {
   height: 4px;

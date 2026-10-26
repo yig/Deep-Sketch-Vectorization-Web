@@ -50,6 +50,7 @@ const ui = {
   showUsm: $<HTMLInputElement>("showUsm"),
   legend: $("legend"),
   download: $<HTMLButtonElement>("download"),
+  statusBox: $("statusBox"),
   progress: $("progress"),
   status: $("status"),
   device: $("device"),
@@ -142,15 +143,15 @@ const options = (): VectorizeOptions => ({
 });
 
 /**
- * Shows a status message. Progress and results (`oneLine`) are truncated to one line, so the status
- * keeps its height while a slider re-runs the pipeline; other messages, like errors, wrap.
+ * Shows a status message. Progress and results (`fixed`) go in a box two lines tall, the progress bar
+ * plus one line of text or two lines of text, truncated with an ellipsis, so the status keeps its
+ * height while a slider re-runs the pipeline. Other messages, like errors, grow the box as needed.
  */
-function setStatus(text: string, frac: number | null = null, oneLine = frac !== null) {
+function setStatus(text: string, frac: number | null = null, fixed = frac !== null) {
   ui.status.textContent = text;
   ui.status.title = text;
-  ui.status.classList.toggle("one-line", oneLine);
-  // Hide the bar without collapsing its space, so the panel below doesn't jump.
-  ui.progress.style.visibility = frac === null ? "hidden" : "visible";
+  ui.statusBox.classList.toggle("fixed", fixed);
+  ui.progress.hidden = frac === null;
   if (frac !== null) (ui.progress.firstElementChild as HTMLElement).style.width = `${Math.round(frac * 100)}%`;
 }
 
