@@ -5,7 +5,7 @@
 // response, so cross-origin isolation does not affect it.
 
 /** The GoatCounter site code (https://<code>.goatcounter.com). Empty disables counting. */
-const GOATCOUNTER_CODE = "";
+const GOATCOUNTER_CODE: string = "cragl-deep-sketch-vectorization-web";
 
 const enabled =
   GOATCOUNTER_CODE !== "" &&
